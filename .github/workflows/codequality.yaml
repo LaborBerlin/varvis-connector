@@ -1,0 +1,76 @@
+# Perform several code quality checks, namely:
+#
+# - check commit messages so that they follow the *conventional commits* standard
+# - check Python code formatting using ruff
+# - lint Python code using ruff
+# - check Python type hints in src/
+#
+# This workflow is run on pushes to main or develop/ and PRs for main or release/.
+# It is also called by the release workflow.
+
+name: Code quality checks
+
+on:
+  push:
+    branches:
+      - main
+      - "develop/**"
+    paths:
+      - ".github/workflows/codequality.yaml"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+
+  pull_request:
+    branches:
+      - main
+      - "release/**"
+    paths:
+      - ".github/workflows/codequality.yaml"
+      - "src/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "uv.lock"
+
+  workflow_call: # can be called by build_and_release_prod workflow
+
+jobs:
+  codequality:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    if: >-
+      github.ref_type == 'tag' ||
+      (github.ref_type == 'branch' && !contains(github.event.head_commit.message, '[skip-ci]'))
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv and set up Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --all-extras
+
+      - name: Check commit messages
+        # it's enough to run this for a single Python version
+        if: ${{ matrix.python-version == '3.12' }}
+        run: uv run git-cliff -u > /dev/null
+
+      - name: Run code format check via ruff
+        run: uv run ruff format --diff
+
+      - name: Run linter via ruff
+        run: uv run ruff check --output-format=github
+
+      - name: Run type checks
+        run: uv run basedpyright
+
+      - name: Run security linter bandit
+        run: uv run bandit -c pyproject.toml -r src/

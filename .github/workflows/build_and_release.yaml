@@ -1,0 +1,78 @@
+# Build and deploy orchestration workflow for production releases
+#
+# This workflow is triggered when a version tag like "v1.2.3" is pushed for all
+# package versions.
+#
+# The workflow will first call the following other workflows which act as gates:
+#
+# - gitleaks
+# - dependencies-audit
+# - codequality
+# - tests
+#
+# After their success, the "build_and_release" job will build the package and copy the wheel and source
+# distribution of the package to GitHub and PyPI.
+
+name: Build and deploy orchestration for production
+
+on:
+  push:
+    tags:
+      - "v*.*.*" # Trigger on pushing version tags like v1.0.0, v20.15.10.post3
+
+jobs:
+  gitleaks:
+    uses: ./.github/workflows/gitleaks.yaml
+
+  deps_audit:
+    uses: ./.github/workflows/dependencies_audit.yaml
+
+  codequality:
+    uses: ./.github/workflows/codequality.yaml
+
+  tests:
+    uses: ./.github/workflows/tests.yaml
+    permissions:
+      contents: write
+    secrets: inherit
+
+  build_and_release:
+    needs: [gitleaks, deps_audit, codequality, tests]
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    permissions:
+      contents: write # required for publishing releases on GitHub
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --group dev
+
+      - name: Build the package
+        id: build_pkg
+        run: |
+          BUILD_OUT=$(make build 2>&1)
+          WHL=$(echo "$BUILD_OUT" | grep -oP 'Successfully built \K.*\.whl')
+          WHL=$(basename $(realpath "$WHL"))
+          echo "Built package wheel $WHL"
+          echo "whl_dist_file=$WHL" >> "$GITHUB_OUTPUT"
+          SRC=$(echo "$BUILD_OUT" | grep -oP 'Successfully built \K.*\.tar.gz')
+          SRC=$(basename $(realpath "$SRC"))
+          echo "Built package source distribution $SRC"
+          echo "src_dist_file=$SRC" >> "$GITHUB_OUTPUT"
+          PKG_VERSION="${{ github.ref_name }}"
+          PKG_VERSION="${PKG_VERSION#v}"   # remove "v" at the start of the tag
+          echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Release the package to GitHub
+        run: echo "TODO"
+
+      - name: Release the package to PyPI
+        # this is only run for non-development releases
+        if: ${{ !contains(github.ref_name, '.dev') }}
+        run: echo "TODO"

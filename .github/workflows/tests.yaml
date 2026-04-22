@@ -1,0 +1,174 @@
+# Run unit tests on the Python code using pytest
+#
+# Is run on pushes to main or develop/ and PRs for main or release/. It is also
+# called by the build_and_release workflow.
+#
+# Additionally, does the following:
+#
+# - for main Python version on push: check test coverage (no misses
+#   in test code)
+# - for main Python version on PR: generate coverage report and badge,
+#   commit & push badge, upload report
+
+name: Tests
+
+on:
+  push:
+    branches:
+      - main
+      - "develop/**"
+    paths:
+      - ".github/workflows/tests.yaml"
+      - "scripts/coverage-check.sh"
+      - "src/**"
+      - "tests/**"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+
+  pull_request:
+    branches:
+      - main
+      - "release/**"
+    paths:
+      - ".github/workflows/tests.yaml"
+      - "scripts/coverage-check.sh"
+      - "src/**"
+      - "tests/**"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+
+  workflow_call: # can be called by release workflow
+    secrets:
+      VARVIS_TEST_PLAYGROUND_USER:
+        required: true
+      VARVIS_TEST_PLAYGROUND_PASSWORD:
+        required: true
+
+# Disable parallel workflow execution to reduce load on Varvis server
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  tests:
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    permissions:
+      contents: read
+    if: >-
+      github.ref_type == 'tag' ||
+      (github.ref_type == 'branch' && !contains(github.event.head_commit.message, '[skip-ci]'))
+    strategy:
+      max-parallel: 1 # disable parallel job execution to reduce load on Varvis server
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv and set up Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies
+        # skip this for the main Python version on a PR, because tests will run anyway when generating
+        # the coverage badge below
+        if: github.event_name != 'pull_request' || matrix.python-version != '3.12'
+        run: uv sync --locked --all-groups --all-extras
+
+      - name: Run tests via pytest
+        if: github.event_name != 'pull_request' || matrix.python-version != '3.12'
+        run: |
+          uv run pytest -rsfE tests
+        env:
+          VARVIS_TEST_SSL_VERIFY: ${{ vars.VARVIS_TEST_SSL_VERIFY }}
+          VARVIS_TEST_PLAYGROUND_URL: ${{ vars.VARVIS_TEST_PLAYGROUND_URL }}
+          VARVIS_TEST_PLAYGROUND_USER: ${{ secrets.VARVIS_TEST_PLAYGROUND_USER }}
+          VARVIS_TEST_PLAYGROUND_PASSWORD: ${{ secrets.VARVIS_TEST_PLAYGROUND_PASSWORD }}
+
+  coverage-badge:
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    needs: tests
+    permissions:
+      # write permissions are required by the "Commit and push badge" step below
+      contents: write
+    if: github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install uv and set up Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --all-extras
+
+      - name: Generate coverage report and badge
+        run: |
+          make coverage-report
+          ls -l coverage-badge.svg
+        env:
+          VARVIS_TEST_SSL_VERIFY: ${{ vars.VARVIS_TEST_SSL_VERIFY }}
+          VARVIS_TEST_PLAYGROUND_URL: ${{ vars.VARVIS_TEST_PLAYGROUND_URL }}
+          VARVIS_TEST_PLAYGROUND_USER: ${{ secrets.VARVIS_TEST_PLAYGROUND_USER }}
+          VARVIS_TEST_PLAYGROUND_PASSWORD: ${{ secrets.VARVIS_TEST_PLAYGROUND_PASSWORD }}
+
+      - name: Prepare badges branch worktree
+        run: |
+          # Clean up any existing worktree directory from previous runs
+          rm -rf ../badges-worktree
+
+          # Prune any stale worktree references
+          git worktree prune
+
+          # Ensure badges branch exists on origin (if not, create from current HEAD)
+          if git ls-remote --exit-code origin badges; then
+            echo "Badges branch exists"
+          else
+            echo "Creating badges branch on origin"
+            git checkout -b badges
+            git push origin badges
+          fi
+
+          # Add a worktree for badges branch
+          git worktree add ../badges-worktree origin/badges
+
+      - name: Copy badge into badges branch
+        #        env:
+        #          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cd ../badges-worktree
+          mkdir -p pr
+          # cp "${{ github.workspace }}/coverage-badge.svg" "pr/pr-${PR_NUMBER}.svg"
+          cp "${{ github.workspace }}/coverage-badge.svg" pr/pr-latest.svg
+
+      - name: Commit and push badge
+        env:
+          #          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          cd ../badges-worktree
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          # git add "pr/pr-${PR_NUMBER}.svg" || echo "Nothing to add"
+          git add "pr/pr-latest.svg" || echo "Nothing to add"
+
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: update coverage badge for PR #${PR_NUMBER}"
+            git push origin HEAD:badges
+          else
+            echo "No badge changes to commit."
+          fi
+
+      - name: Create and upload coverage report as artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: .reports/coverage.xml
+          include-hidden-files: true

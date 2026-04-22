@@ -1,0 +1,12 @@
+version: 2
+updates:
+  # github actions version updates
+  - package-ecosystem: "github-actions"
+    # You don't need to specify `/.github/workflows` for `directory`. You can use `directory: "/"`.
+    directory: "/"
+    schedule:
+      interval: "monthly"
+    assignees:
+      - internaut
+    labels:
+      - dependencies

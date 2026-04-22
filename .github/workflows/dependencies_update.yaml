@@ -1,0 +1,76 @@
+# Run Python package dependencies update check
+#
+# This workflow is run once per month via cron schedule.
+#
+# It will check for available updates using "uv lock -U". If there are updates, it will create
+# an issue and a branch that is connected to that issue. An updated lockfile is pushed to that
+# branch and codeowners will be notified about the issue.
+#
+# Note: The github client "gh" must be installed on the runner.
+
+name: Python package dependencies updates
+
+on:
+  schedule:
+    # run at 8:25am on the 1st of every month
+    - cron: "25 8 1 * *"
+
+jobs:
+  dependencies_update:
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    permissions:
+      # required for creating and pushing a commit
+      contents: write
+      # required for creating an issue
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: main
+
+      - name: Install uv and set up Python ${{ matrix.python-version }}
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Check dependencies in uv.lock for possible updates
+        run: |
+          updates=$(make depcheck)
+
+          if [ -n "$updates" ] ; then
+            echo "Updates available:"
+            echo "$updates"
+
+            # prepare git
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+            # create branchname
+            today=$(date -I)
+            branch="develop/dependency-updates-$today"
+
+            # create an issue
+            test -f .github/CODEOWNERS || (echo "a CODEOWNERS file must be given"; exit 1)
+            usernames=$(sed -n 's/^\*\s*@\([A-Za-z0-9_]\+\)/\1/p' .github/CODEOWNERS | paste -sd ',' -)
+            content=$(<.github/issue-template-dep-updates.md)
+            content="${content//\{DATE\}/$today}"
+            content="${content//\{BRANCH\}/$branch}"
+            content="${content//\{UPDATES\}/$updates}"
+            issue_url=$(gh issue create -t "Dependency updates as of $today" -a "$usernames" -l dependencies -b "$content")
+
+            # create and checkout the branch and connect it with the issue
+            gh issue develop "$issue_url" -n "$branch" -c
+
+            # update the lockfile
+            uv lock -qU
+
+            # commit and push changes to branch
+            git add uv.lock
+            git commit --no-verify -m "chore(deps): update dependencies [skip-ci]"
+            git push origin --no-verify "$branch"
+          else
+            echo "No updates available"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}

@@ -1,0 +1,27 @@
+# Run check for credential leaks
+#
+# This workflow is run on any push.
+
+name: Credential leaks check
+
+# can also be called by release workflow
+on: [push, workflow_call]
+
+jobs:
+  gitleaks-check:
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          sudo apt update
+          sudo apt install gitleaks
+
+      - name: Check for credential leaks in repository
+        run: gitleaks detect -v --no-banner --redact

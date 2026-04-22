@@ -1,0 +1,22 @@
+/.env
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv
+.scratches/
+.~lock.*
+.idea/
+.coverage
+.reports/
+/api_sample_data/
+tmp/
+
+# CLAUDE.md
+CLAUDE.md
+.claude/
+
+# local data folder
+data/

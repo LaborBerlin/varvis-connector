@@ -1,0 +1,57 @@
+# Run Python package dependencies security audit (i.e. scan for known vulnerabilities)
+#
+# This workflow is run on pushes to main or develop/ and PRs for main or release/
+# and each night via cron schedule. It is also called by the release workflow.
+
+name: Python package dependencies audit
+
+on:
+  push:
+    branches:
+      - main
+      - "develop/**"
+    paths:
+      - ".github/workflows/dependencies_audit.yaml"
+      - "scripts/audit-deps.sh"
+      - ".python-version"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+
+  pull_request:
+    branches:
+      - main
+      - "release/**"
+    paths:
+      - ".github/workflows/dependencies_audit.yaml"
+      - "scripts/audit-deps.sh"
+      - ".python-version"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+
+  workflow_call: # can be called by release workflow
+
+  schedule:
+    # run at 1:25am each wednesday
+    - cron: "25 1 * * 3"
+
+jobs:
+  dependencies_audit:
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install uv and set up Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --all-extras
+
+      - name: Check dependencies in uv.lock for known vulnerabilities
+        run: make audit
