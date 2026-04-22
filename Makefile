@@ -103,8 +103,7 @@ audit:
 
 # (re-)generate the changelog
 changelog:
-	uv run git-cliff -o CHANGELOG.md 233d987..HEAD \
-		--tag "v$$(uv version | cut -d" " -f2)"
+	uv run git-cliff -o CHANGELOG.md --tag "v$$(uv version | cut -d" " -f2)"
 	pandoc -f gfm -t rst --columns=120 -o docs/source/changelog.rst CHANGELOG.md
 
 # prepare a pull request: generate changelog, optionally bump the version,

@@ -14,6 +14,11 @@ The `varvis-connector` package provides a Python interface for the Varvis API. I
 provides methods to retrieve various types of genomic data including SNV annotations, CNV target results, and CNV
 segments. It supports environment-based configuration and includes comprehensive error handling.
 
+## License
+
+This project is licensed under the GNU General Public License v3.0 (GPLv3).
+See the LICENSE file for details.
+
 ## Documentation
 
 The full documentation for this project is available at [laborberlin.github.io/varvis-connector/](https://laborberlin.github.io/varvis-connector/)

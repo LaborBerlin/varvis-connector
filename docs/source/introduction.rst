@@ -97,4 +97,10 @@ The following API endpoints are currently covered both by the CLI and the Python
      - :any:`VarvisClient.get_file_download_links` / :any:`VarvisClient.download_files`
 
 
-In addition to that, it's possible to send arbitrary authenticated requests to the API using the CLI :ref:`cli-request` command or the :any:`VarvisClient.request` method, which is especially useful for undocumented endpoints.
+In addition to that, it's possible to send arbitrary authenticated requests to the API using the CLI :ref:`cli-request`
+command or the :any:`VarvisClient.request` method, which is especially useful for undocumented endpoints.
+
+License
+~~~~~~~
+
+This project is licensed under the GNU General Public License v3.0 (GPLv3). See the LICENSE file for details.
