@@ -55,6 +55,7 @@ jobs:
 
       - name: Build the package
         id: build_pkg
+        # Build distributions and expose their filenames as job outputs for later release steps.
         run: |
           BUILD_OUT=$(make build 2>&1)
           WHL=$(echo "$BUILD_OUT" | grep -oP 'Successfully built \K.*\.whl')
@@ -76,3 +77,11 @@ jobs:
         # this is only run for non-development releases
         if: ${{ !contains(github.ref_name, '.dev') }}
         run: echo "TODO"
+
+  docs:
+    needs: build_and_release
+    uses: ./.github/workflows/docs.yaml
+    permissions:
+      contents: read
+      pages: write
+      id-token: write

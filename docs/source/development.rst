@@ -192,7 +192,9 @@ Workflows live in ``.github/workflows/``:
   bandit (Python 3.11 to 3.14).
 - **``gitleaks.yaml``**: credential leak scan on every push/PR.
 - **``docs.yaml``**: build the documentation and publish it to GitHub pages.
-- **``release.yaml``**: build the package and publish it to PyPI.
+- **``build_and_release.yaml``**: orchestrate production releases, including
+  running the gate workflows, building the package and then publishing the
+  documentation workflow.
 
 CI runs can be skipped on branch pushes by including ``[skip-ci]`` in the
 commit message (tests/codequality honor this).
@@ -204,8 +206,8 @@ Create and push a version tag based on the current package version::
 
     make release
 
-This pushes a tag ``v<version>`` and triggers the ``release`` GitHub Actions
-workflow.
+This pushes a tag ``v<version>`` and triggers the ``build_and_release`` GitHub
+Actions workflow.
 
 Varvis API quirks
 -----------------

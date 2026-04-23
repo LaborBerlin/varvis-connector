@@ -1,0 +1,65 @@
+# Generate the Sphinx documentation and deploy it to GitHub pages
+#
+# Is run on pushes to main and called by the build_and_release workflow.
+
+name: Documentation
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/docs.yaml"
+      - "docs/**"
+      - "Makefile"
+      - "pyproject.toml"
+      - "uv.lock"
+
+  workflow_call:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build-docs:
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up uv and Python
+        uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: uv sync --locked --all-groups --all-extras
+
+      - name: Build documentation
+        run: make docs
+
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: docs/build/html
+
+  deploy:
+    needs: build-docs
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5

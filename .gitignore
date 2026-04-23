@@ -13,6 +13,7 @@ wheels/
 .reports/
 /api_sample_data/
 tmp/
+.agents/plan-*.md
 
 # CLAUDE.md
 CLAUDE.md
