@@ -36,11 +36,11 @@ jobs:
       contents: write
     secrets: inherit
 
-  build_and_release:
+  build:
     needs: [gitleaks, deps_audit, codequality, tests]
     runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
     permissions:
-      contents: write # required for publishing releases on GitHub
+      contents: read
 
     steps:
       - uses: actions/checkout@v6
@@ -55,28 +55,100 @@ jobs:
 
       - name: Build the package
         id: build_pkg
-        # Build distributions and expose their filenames as job outputs for later release steps.
         run: |
-          BUILD_OUT=$(make build 2>&1)
-          WHL=$(echo "$BUILD_OUT" | grep -oP 'Successfully built \K.*\.whl')
-          WHL=$(basename $(realpath "$WHL"))
-          echo "Built package wheel $WHL"
-          echo "whl_dist_file=$WHL" >> "$GITHUB_OUTPUT"
-          SRC=$(echo "$BUILD_OUT" | grep -oP 'Successfully built \K.*\.tar.gz')
-          SRC=$(basename $(realpath "$SRC"))
-          echo "Built package source distribution $SRC"
-          echo "src_dist_file=$SRC" >> "$GITHUB_OUTPUT"
+          make build
           PKG_VERSION="${{ github.ref_name }}"
           PKG_VERSION="${PKG_VERSION#v}"   # remove "v" at the start of the tag
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
 
-      - name: Release the package to GitHub
-        run: echo "TODO"
+      - name: Store the distribution packages
+        uses: actions/upload-artifact@v5
+        with:
+          name: python-package-distributions
+          path: dist/
 
-      - name: Release the package to PyPI
-        # this is only run for non-development releases
-        if: ${{ !contains(github.ref_name, '.dev') }}
-        run: echo "TODO"
+  publish_gh:
+    # publish package to GitHub "releases"
+    needs: build
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    permissions:
+      contents: write # required for publishing releases on GitHub
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Generate changelog for current version
+        id: generate_changelog
+        run: |
+          # generate changes for this version which will be attached to the GitHub release in a later step;
+          # we just take the latest section in the changelog
+          if [[ "$PKG_VERSION" == *".dev"* ]]; then
+            CUR_CHANGES="No changelog (development release)"
+          else
+            CUR_CHANGES=$(awk '
+              /^## / { n++ }
+              n == 0 || n == 1
+            ' CHANGELOG.md)
+          fi
+          EOF=$(dd if=/dev/urandom bs=15 count=1 status=none | base64)
+          {
+            echo "changes_text<<$EOF"
+            echo "$CUR_CHANGES"
+            echo "$EOF"
+          } >> "$GITHUB_OUTPUT"
+        env:
+          PKG_VERSION: ${{ needs.build.outputs.pkg_version }}
+      - name: Create a GitHub release
+        uses: LaborBerlin/action-gh-release@latest
+        with:
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+          body: ${{ steps.generate_changelog.outputs.changes_text }}
+
+  publish_pypi:
+    # publish package to PyPI
+    needs: build
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    # this is only run for non-development releases
+    if: ${{ !contains(github.ref_name, '.dev') }}
+    environment:
+      name: pypi
+      url: https://pypi.org/p/varvis-connector
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish distribution package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  publish_testpypi:
+    # publish package to PyPI **test instance**
+    needs: build
+    runs-on: ubuntu-slim # single-cpu runner is enough for this workflow
+    # this is only run for development releases
+    if: ${{ contains(github.ref_name, '.dev') }}
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/varvis-connector
+    permissions:
+      id-token: write
+    steps:
+      - name: Download all the dists
+        uses: actions/download-artifact@v6
+        with:
+          name: python-package-distributions
+          path: dist/
+      - name: Publish distribution package to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          repository-url: https://test.pypi.org/legacy/
 
   docs:
     needs: build_and_release
