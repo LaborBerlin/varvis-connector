@@ -1,6 +1,19 @@
 Introduction
 ------------
 
+.. image:: https://img.shields.io/badge/GitHub-varvis--connector-181717?logo=github
+   :alt: GitHub repository
+   :target: https://github.com/LaborBerlin/varvis-connector
+
+.. image:: https://github.com/LaborBerlin/varvis-connector/actions/workflows/tests.yaml/badge.svg
+   :alt: CI testing pipeline
+
+.. image:: https://github.com/LaborBerlin/varvis-connector/actions/workflows/codequality.yaml/badge.svg
+   :alt: CI code quality pipeline
+
+.. image:: https://github.com/LaborBerlin/varvis-connector/raw/refs/heads/badges/pr/pr-latest.svg
+   :alt: Test coverage
+
 The ``varvis-connector`` package provides a Python interface for the Varvis API. It includes both a command-line interface (CLI) and a Python package with a client implementation. The package handles authentication, session management, and provides methods to retrieve various types of genomic data including SNV annotations, CNV target results, and CNV segments. It supports environment-based configuration and includes comprehensive error handling.
 
 Features
