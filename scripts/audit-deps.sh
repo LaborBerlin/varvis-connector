@@ -14,19 +14,20 @@ set -Eeuo pipefail
 echo "Generating requirements.txt ..."
 reqfile=$(mktemp --suffix .txt)
 uv export --locked --all-extras --all-groups \
-    --no-annotate \
-    --no-editable \
-    --no-emit-local \
-    --no-progress -q \
-    -o "$reqfile"
+  --no-annotate \
+  --no-editable \
+  --no-emit-local \
+  --no-progress -q \
+  -o "$reqfile"
 
 tmpfile=$(mktemp --suffix .txt)
-for exclude_pkg in "$@"; do \
-    echo "Excluding package $exclude_pkg"
+for exclude_pkg in "$@"; do
+  echo "Excluding package $exclude_pkg"
 
-    grep -v "^$exclude_pkg==" "$reqfile" > "$tmpfile"
-    cp "$tmpfile" "$reqfile"
+  grep -v "^$exclude_pkg==" "$reqfile" >"$tmpfile"
+  cp "$tmpfile" "$reqfile"
 done
 
 echo "Auditing dependencies ..."
-uv run pip-audit --disable-pip --aliases -r "$reqfile"
+# ignore CVE-2026-3219 (pip) which is a false positive (pip is a system dependency not handled here)
+uv run pip-audit --disable-pip --aliases --ignore-vuln CVE-2026-3219 -r "$reqfile"
