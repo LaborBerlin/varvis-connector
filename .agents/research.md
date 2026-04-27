@@ -11,6 +11,8 @@ Its core purpose is not just to wrap HTTP endpoints, but to hide a number of inc
 
 The project is fairly mature in terms of developer ergonomics: it has strong documentation, broad automated tests, typed Pydantic models, linting/type-checking/security checks, and CI across Python 3.10 to 3.14. The main architectural weakness is concentration of logic in large modules, especially the CLI module. There are also a few places where runtime `assert` statements are used as correctness guards, which is less robust than explicit error handling.
 
+The package version is managed in `pyproject.toml`; the repository is on the `0.2.0.dev9` development line.
+
 ## What The Project Does
 
 At a high level, this repository provides a stable and scriptable interface around Varvis for:
@@ -66,6 +68,8 @@ The package entry point is simple:
 
 - `src/varvis_connector/__main__.py` creates `VarvisCLI` and runs it
 - `src/varvis_connector/__init__.py` re-exports `VarvisClient` and package version
+
+The package metadata in `pyproject.toml` is set up for public distribution. It includes README, author, GPL-3.0-only license metadata, license file declaration, keywords, PyPI classifiers for Python 3.10 through 3.14, and project URLs for homepage, hosted documentation, repository, issues, and changelog.
 
 ## Runtime Architecture
 
@@ -614,14 +618,9 @@ The docs are good and materially useful.
 
 The development guide is better than average because it explains not only how to contribute, but why the code contains certain defensive logic.
 
-### Documentation mismatch observed
+### Documentation publishing
 
-The development docs mention workflow filenames `docs.yaml` and `release.yaml`, but the repository currently contains:
-
-- `build_and_release.yaml`
-- no `docs.yaml`
-
-So at least part of the development documentation is stale relative to the current workflow file names.
+The documentation is published through the `docs.yaml` workflow and hosted on GitHub Pages. Production releases trigger the release orchestration workflow, which builds the package and then calls the docs workflow to publish the generated Sphinx documentation.
 
 ## CI / Release / Maintenance Workflow
 
@@ -633,6 +632,7 @@ The project uses:
 
 - `uv` for environment and dependency management
 - `uv_build` as build backend
+- Pydantic, requests, and tqdm as runtime dependencies
 - Ruff for linting/formatting
 - basedpyright for type checking
 - Bandit for security linting
@@ -650,6 +650,7 @@ The repository contains workflows for:
 - scheduled dependency update issue/branch creation
 - gitleaks secret scanning
 - build/release orchestration
+- documentation publishing to GitHub Pages
 
 ### Interesting maintenance choices
 
@@ -657,15 +658,26 @@ The repository contains workflows for:
 - tests intentionally serialize CI concurrency to reduce load on the Varvis server
 - dependency updates are partially automated through a scheduled workflow that opens an issue, creates a branch, updates `uv.lock`, and pushes a commit
 - `git-cliff` is used both for changelog generation and for conventional-commit enforcement
+- `uv` uses a seven-day dependency cooldown through `exclude-newer`, with a package-specific exception for `pip`
+- gitleaks ignores version-tag push events as a standalone workflow trigger because the release orchestration workflow calls it explicitly for releases
+- pre-commit mirrors the main local quality gates, including Ruff, Bandit, basedpyright, shellcheck, markdown formatting, and project-local commit/changelog checks
 
 ### Release state
 
-The release workflow is not fully implemented yet:
+The release workflow is fully responsible for package publication on version tags.
 
-- GitHub release publishing step is currently `echo "TODO"`
-- PyPI publishing step is also `echo "TODO"`
+`build_and_release.yaml` runs on tags matching `v*.*.*`. It gates releases with gitleaks and dependency audit for all tags. Non-development tags additionally require code quality and tests. Development tags containing `.dev` can build and publish after the security-oriented gates without running the full code quality and test gate inside the release workflow.
 
-So the repository has strong scaffolding for release automation, but not a fully completed publishing pipeline.
+The build job creates wheel and source distributions with `make build`, derives the package version from the tag name, and uploads the `dist/` directory as a workflow artifact.
+
+Publication is split by tag type:
+
+- non-development tags publish artifacts to GitHub Releases
+- non-development tags publish to PyPI through trusted publishing/OIDC
+- development tags publish to TestPyPI
+- all successful release builds trigger the documentation workflow for GitHub Pages
+
+GitHub release notes are generated from the current top section of `CHANGELOG.md`, and the release assets include both wheel and source distribution files.
 
 ## Code Quality Assessment
 
@@ -718,9 +730,9 @@ This is not fatal, but it is a tradeoff toward operator convenience over interna
 
 Many command handlers call `exit(1)` directly. Others rely on the top-level `VarvisCLI.run()` exception trap. The result is a somewhat mixed control-flow style.
 
-#### Minor stale docs / naming drift
+#### Release workflow complexity
 
-There are a few documentation/workflow naming mismatches, which suggests the documentation is maintained actively but not perfectly synchronized with recent automation changes.
+The release workflow is one of the higher-risk pieces of repository automation. It coordinates security gates, optional quality/test gates for development tags, package artifact upload/download, GitHub Release publication, PyPI/TestPyPI publication, changelog extraction, and documentation publishing. Small YAML changes here can affect published artifacts directly.
 
 ## Specific Findings And Nuances Worth Remembering
 
@@ -731,7 +743,7 @@ There are a few documentation/workflow naming mismatches, which suggests the doc
 - The CLI is intentionally pipeline-friendly and carefully avoids polluting stdout when data output is expected there.
 - Virtual panel update performs client-side merge behavior by fetching the current remote panel first.
 - File download handling has decent filename/path safety checks.
-- The project currently looks like an initial public release with mature tooling but a short external changelog history.
+- The project is an early but actively publishable package line, with mature tooling and an implemented release pipeline rather than only local build support.
 
 ## Suggested Reading Order For Future Work
 
