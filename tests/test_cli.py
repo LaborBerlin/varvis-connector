@@ -277,7 +277,7 @@ def test_optional_args(monkeypatch_clean_env, argname, argvalue, set_envvar, env
         "testpass",
     ]
 
-    if argname is not None and argvalue is not None:
+    if argvalue is not None:
         if argname == "disable-ssl-verify":
             args.append("--disable-ssl-verify")
         else:
