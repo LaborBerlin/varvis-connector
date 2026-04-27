@@ -1,6 +1,10 @@
 # Changelog
 
-## 0.1.3.post1 - 2026-04-22
+## 0.2.0 - 2026-04-27
+
+### CI
+
+- Add docs pages workflow
 
 ### Documentation
 
