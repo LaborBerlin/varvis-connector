@@ -5,6 +5,7 @@
 ### CI
 
 - Add docs pages workflow
+- Set up publishing to PyPI and GitHub releases
 
 ### Documentation
 
@@ -13,4 +14,9 @@
 ### Other
 
 - Squash git history to create first public release
+- Set up AI assistance by providing AGENTS.md and `update-dependencies` skill
+
+### Testing
+
+- Fix type hint issue in `test_optional_args`
 

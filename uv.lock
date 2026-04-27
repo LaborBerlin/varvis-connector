@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-04-20T12:32:46.755660475Z"
+exclude-newer = "2026-04-20T13:33:06.860323884Z"
 exclude-newer-span = "P7D"
 
 [options.exclude-newer-package]
@@ -1711,7 +1711,7 @@ wheels = [
 
 [[package]]
 name = "varvis-connector"
-version = "0.2.0.dev9"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
