@@ -1,13 +1,42 @@
 [project]
 name = "varvis-connector"
-version = "0.2.0"
-description = "A Python package and CLI tool for interacting with the Varvis API."
-license = { text = "GPL-3.0-only" }
+version = "0.2.0.dev5"
+description = "A Python package and CLI tool for interacting with the Varvis® API."
+authors = [
+  { name = "Markus Konrad", email = "markus.konrad@laborberlin.com" },
+  { name = "Bernt Popp", email = "bernt.popp@laborberlin.com" },
+]
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
+keywords = ["api", "varvis", "cli"]
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Healthcare Industry",
+  "Environment :: Console",
+  "Environment :: Web Environment",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Operating System :: OS Independent",
+  "Topic :: Scientific/Engineering :: Bio-Informatics",
+  "Topic :: Scientific/Engineering :: Medical Science Apps.",
+  "Topic :: Software Development :: Libraries",
+  "Typing :: Typed",
   "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
 ]
 requires-python = ">=3.10"
 dependencies = ["pydantic>=2.12.5", "requests>=2.33.1", "tqdm>=4.67.3"]
+
+[project.urls]
+Homepage = "https://github.com/LaborBerlin/varvis-connector"
+Documentation = "https://laborberlin.github.io/varvis-connector/"
+Repository = "https://github.com/LaborBerlin/varvis-connector"
+Issues = "https://github.com/LaborBerlin/varvis-connector/issues"
+Changelog = "https://github.com/LaborBerlin/varvis-connector/blob/master/CHANGELOG.md"
 
 [dependency-groups]
 dev = [
