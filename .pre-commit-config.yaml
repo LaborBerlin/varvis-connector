@@ -20,7 +20,7 @@ repos:
       - id: shellcheck
         args: ["-x"]
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.15.10
+    rev: v0.15.11
     hooks:
       - id: ruff-check
         args: [--fix]
@@ -32,7 +32,7 @@ repos:
         args: ["-c", "pyproject.toml", "-r", "src/"]
         additional_dependencies: ["bandit[toml]"]
   - repo: https://github.com/DetachHead/basedpyright-pre-commit-mirror
-    rev: 1.39.0
+    rev: 1.39.3
     hooks:
       - id: basedpyright
   - repo: local
