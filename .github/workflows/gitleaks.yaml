@@ -1,11 +1,15 @@
 # Run check for credential leaks
 #
-# This workflow is run on any push.
+# This workflow is run on any push except version tag pushes.
 
 name: Credential leaks check
 
 # can also be called by release workflow
-on: [push, workflow_call]
+on:
+  push:
+    tags-ignore:
+      - "v*.*.*"
+  workflow_call:
 
 jobs:
   gitleaks-check:
