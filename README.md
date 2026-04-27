@@ -21,7 +21,8 @@ See the LICENSE file for details.
 
 ## Documentation
 
-The full documentation for this project is available at [laborberlin.github.io/varvis-connector/](https://laborberlin.github.io/varvis-connector/)
+The full documentation for this project is available at
+[laborberlin.github.io/varvis-connector/](https://laborberlin.github.io/varvis-connector/)
 
 It covers:
 
