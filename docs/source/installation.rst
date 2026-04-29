@@ -15,11 +15,11 @@ Option 1 is to install it via ``pip`` from PyPI::
 
     pip install varvis-connector
 
-Option 2 is to download either the "wheel" or source distribution package from the `GitHub releases page <https://github.com/LaborBerlin/varvis-connector/releases>_` and then install it via ``pip``::
+Option 2 is to download either the "wheel" or source distribution package from the `GitHub releases page <https://github.com/LaborBerlin/varvis-connector/releases>`_ and then install it via ``pip``::
 
     pip install varvis_connector-<VERSION>.whl   # or .tar.gz
 
-Option 3 is downloading or cloning this repository. The package and its command-line utility can the be installed with  ``pip install <path-to-repository>``.
+Option 3 is downloading or cloning this repository. The package and its command-line utility can then be installed with  ``pip install <path-to-repository>``.
 
 
 Configuration / environment variables
