@@ -80,7 +80,7 @@ jobs:
           echo "pkg_version=$PKG_VERSION" >> "$GITHUB_OUTPUT"
 
       - name: Store the distribution packages
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: python-package-distributions
           path: dist/
