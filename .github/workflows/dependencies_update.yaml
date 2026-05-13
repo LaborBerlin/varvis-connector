@@ -30,7 +30,7 @@ jobs:
           ref: main
 
       - name: Install uv and set up Python ${{ matrix.python-version }}
-        uses: astral-sh/setup-uv@v7
+        uses: astral-sh/setup-uv@v8.1.0
         with:
           python-version: "3.12"
 
