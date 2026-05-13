@@ -33,8 +33,12 @@ git add CHANGELOG.md docs/source/changelog.rst
 
 git_args=()
 read -rp "Amend previous commit? (y/N): " a
-[[ "$a" =~ ^[Yy]$ ]] && git_args+=(--amend)
-git commit "${git_args[@]}" -m "chore: version bump to v$CUR_VERS"
+if [[ "$a" =~ ^[Yy]$ ]]; then
+  git_args+=(--amend --no-edit)
+else
+  git_args+=(-m "chore: version bump to v$CUR_VERS")
+fi
+git commit "${git_args[@]}"
 
 BRANCH="release/v$CUR_VERS"
 git branch -m "$BRANCH"
