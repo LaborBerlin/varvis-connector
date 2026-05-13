@@ -15,8 +15,9 @@ test -f "$ROOT/.env" && source "$ROOT/.env"
 
 for pyvers in "$@"; do
   echo "Running tests with Python version $pyvers"
-  if uvx run --python="$pyvers" ruff check &&
-    uvx run --python="$pyvers" basedpyright src/ &&
+  # run the lint and type checks in the requested interpreter
+  if uvx --python="$pyvers" ruff check &&
+    uvx --python="$pyvers" basedpyright src/ &&
     uv run --python="$pyvers" --isolated --dev --all-extras pytest -xrsfE -n auto tests; then
     echo -e "\033[32mAll checks passed for Python $pyvers\033[0m"
   else

@@ -658,7 +658,9 @@ The repository contains workflows for:
 - tests intentionally serialize CI concurrency to reduce load on the Varvis server
 - dependency updates are partially automated through a scheduled workflow that opens an issue, creates a branch, updates `uv.lock`, and pushes a commit
 - `git-cliff` is used both for changelog generation and for conventional-commit enforcement
-- `uv` uses a seven-day dependency cooldown through `exclude-newer`, with a package-specific exception for `pip`
+- `uv` uses a seven-day dependency cooldown through `exclude-newer`, with a package-specific exception for `urllib3`
+- dependency refreshes follow `make depupgrade`, which runs `uv lock -U`, `uv sync --all-groups --all-extras`, tool upgrades, and `pre-commit autoupdate`
+- the current pre-commit baseline includes `ruff-pre-commit` `v0.15.12` and `basedpyright-pre-commit-mirror` `1.39.4`
 - gitleaks ignores version-tag push events as a standalone workflow trigger because the release orchestration workflow calls it explicitly for releases
 - pre-commit mirrors the main local quality gates, including Ruff, Bandit, basedpyright, shellcheck, markdown formatting, and project-local commit/changelog checks
 
