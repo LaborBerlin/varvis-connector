@@ -190,9 +190,7 @@ def test_help(capfd, monkeypatch):
         ("password", None, None),
     ],
 )
-def test_required_args(
-    capfd, monkeypatch_clean_env, drop_arg, set_envvar, expected_value
-):
+def test_required_args(capfd, monkeypatch_clean_env, drop_arg, set_envvar, expected_value):
     required_args = [
         "--api-url",
         "https://foo.com/",
@@ -210,9 +208,7 @@ def test_required_args(
     if set_envvar:
         monkeypatch_clean_env.setenv(set_envvar, expected_value)
 
-    monkeypatch_clean_env.setattr(
-        sys, "argv", ["varvis_connector"] + required_args + ["check-login"]
-    )
+    monkeypatch_clean_env.setattr(sys, "argv", ["varvis_connector"] + required_args + ["check-login"])
 
     if expected_value is SystemExit:
         with pytest.raises(SystemExit):
@@ -286,16 +282,12 @@ def test_optional_args(monkeypatch_clean_env, argname, argvalue, set_envvar, env
     if set_envvar is not None and envvalue is not None:
         monkeypatch_clean_env.setenv(set_envvar, str(envvalue))
 
-    monkeypatch_clean_env.setattr(
-        sys, "argv", ["varvis_connector"] + args + ["check-login"]
-    )
+    monkeypatch_clean_env.setattr(sys, "argv", ["varvis_connector"] + args + ["check-login"])
 
     monkeypatch_clean_env.setenv("TEST_DONT_RUN_CMD", "1")
     monkeypatch_clean_env.setenv("TEST_RETURN_CLI", "1")
     cli = main()
-    fieldname = (
-        "ssl_verify" if argname == "disable-ssl-verify" else argname.replace("-", "_")
-    )
+    fieldname = "ssl_verify" if argname == "disable-ssl-verify" else argname.replace("-", "_")
 
     assert isinstance(cli, VarvisCLI)
     client_val = getattr(cli._client, fieldname)
@@ -370,9 +362,7 @@ def test_get_internal_person_id(
             )
             expected_output[lims_id] = expected_personal_id
 
-    _run_cmd_and_check_output(
-        capfd, output_file, output_indent, expected_output or None
-    )
+    _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output or None)
 
 
 @pytest.mark.parametrize(
@@ -417,9 +407,7 @@ def test_get_snv_annotations(
             # keys have to be strings in JSON
             expected_output[str(a_id)] = snv_annotation_data_dict
 
-    _run_cmd_and_check_output(
-        capfd, output_file, output_indent, expected_output or None
-    )
+    _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output or None)
 
 
 @pytest.mark.parametrize(
@@ -476,9 +464,7 @@ def test_get_cnv_target_results(
         expected_output = None
         expected_err_msg = "Could not retrieve CNV target results for LIMS-ID"
 
-    _run_cmd_and_check_output(
-        capfd, output_file, output_indent, expected_output, expected_err_msg
-    )
+    _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output, expected_err_msg)
 
 
 @pytest.mark.parametrize(
@@ -535,18 +521,14 @@ def test_get_pending_cnv_segments(
             )
     else:
         expected_output = None
-        expected_err_msg = (
-            "Could not retrieve pending CNV segments for internal person ID"
-        )
+        expected_err_msg = "Could not retrieve pending CNV segments for internal person ID"
 
     varvis_mockapi_with_login.get(
         MOCK_URL + "pending-cnv",
         json={"response": expected_output, "success": True},
     )
 
-    _run_cmd_and_check_output(
-        capfd, output_file, output_indent, expected_output, expected_err_msg
-    )
+    _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output, expected_err_msg)
 
 
 @pytest.mark.parametrize(
@@ -633,10 +615,7 @@ def test_get_coverage_data(
         expected_output = {}
         for lims_id in lims_ids:
             n_items = random.randint(1, 10)
-            data = [
-                CoverageDataFactory.build().model_dump(mode="json")
-                for _ in range(n_items)
-            ]
+            data = [CoverageDataFactory.build().model_dump(mode="json") for _ in range(n_items)]
             expected_output[lims_id] = data
 
             varvis_mockapi_with_login.get(
@@ -726,9 +705,7 @@ def test_get_report_info_for_persons(
     expected_output = []
     mock_data = []
     for i in range(1, simulate_output_size + 1):
-        model_instance = PersonReportItemFactory.build(
-            limsId=f"mock-person-{i}"
-        ).model_dump(mode="json")
+        model_instance = PersonReportItemFactory.build(limsId=f"mock-person-{i}").model_dump(mode="json")
         mock_data.append(model_instance)
         expected_output.append(model_instance)
 
@@ -737,9 +714,7 @@ def test_get_report_info_for_persons(
         json={"response": mock_data, "success": True},
     )
 
-    _run_cmd_and_check_output(
-        capfd, output_file, output_indent, expected_output or None
-    )
+    _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output or None)
 
 
 @pytest.mark.parametrize(
@@ -780,9 +755,7 @@ def test_get_person_analyses(
 
             mock_data = []
             for _ in range(random.randint(0, 4)):
-                model_instance = AnalysisItemFactory.build(
-                    personLimsId=lims_id
-                ).model_dump(mode="json")
+                model_instance = AnalysisItemFactory.build(personLimsId=lims_id).model_dump(mode="json")
                 mock_data.append(model_instance)
             expected_output[lims_id] = mock_data
 
@@ -838,9 +811,7 @@ def test_get_case_report(
         for lims_id in lims_ids:
             if lims_id == "NON_EXISTENT":
                 continue
-            mock_data = CaseReportFactory.build(
-                draft=lims_id.endswith("DRAFT")
-            ).model_dump(mode="json")
+            mock_data = CaseReportFactory.build(draft=lims_id.endswith("DRAFT")).model_dump(mode="json")
             expected_output[lims_id] = mock_data
 
             varvis_mockapi_with_login.get(
@@ -942,9 +913,7 @@ def test_create_or_update_person(
         "hpoTermIds": "hpo-term-ids",
     }
 
-    person_data = PersonUpdateDataFactory.build(
-        birthDateYear=1234, birthDateMonth=12, birthDateDay=9
-    ).model_dump()
+    person_data = PersonUpdateDataFactory.build(birthDateYear=1234, birthDateMonth=12, birthDateDay=9).model_dump()
     person_data.update(set_data)
 
     further_args = []
@@ -997,10 +966,7 @@ def test_create_or_update_person(
         main()
         captured = capfd.readouterr()
         assert captured.out.startswith("Running varvis_connector ")
-        assert (
-            "Successfully created or updated person with internal person ID 123"
-            in captured.out
-        )
+        assert "Successfully created or updated person with internal person ID 123" in captured.out
         assert "Logout successful" in captured.out
 
 
@@ -1100,9 +1066,7 @@ def test_get_virtual_panel(
         vp_ids_args,
     )
 
-    _run_cmd_and_check_output(
-        capfd, output_file, output_indent, expected_output or None
-    )
+    _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output or None)
 
 
 @pytest.mark.parametrize(
@@ -1413,9 +1377,7 @@ def test_get_file_download_links(
             if id_ <= 0:
                 continue
 
-            model_instance = AnalysisFileDownloadLinksFactory.build(id=id_).model_dump(
-                mode="json"
-            )
+            model_instance = AnalysisFileDownloadLinksFactory.build(id=id_).model_dump(mode="json")
             expected_output[str(id_)] = model_instance
             varvis_mockapi_with_login.get(
                 MOCK_URL + f"api/analysis/{id_}/get-file-download-links",
@@ -1517,9 +1479,7 @@ def test_download_files(
             target_folder = output_dir / str(a_id)
         elif isinstance(create_folder_per_id, str):
             if "%ID" in create_folder_per_id:
-                target_folder = output_dir / create_folder_per_id.replace(
-                    "%ID", str(a_id)
-                )
+                target_folder = output_dir / create_folder_per_id.replace("%ID", str(a_id))
             else:
                 target_folder = output_dir / (create_folder_per_id + str(a_id))
         else:
@@ -1541,9 +1501,7 @@ def test_download_files(
                 else:
                     if file_pattern:
                         f_lwr = f.lower()
-                        assert f_exists == any(
-                            fnmatchcase(f_lwr, pat.lower()) for pat in file_pattern
-                        )
+                        assert f_exists == any(fnmatchcase(f_lwr, pat.lower()) for pat in file_pattern)
                     else:
                         assert f_exists
 
@@ -1553,14 +1511,10 @@ def test_download_files(
                     assert f_path.read_text() == "already existed"
                 else:
                     assert f_path.read_text() == "testdata"
-                    overwritten = (
-                        simulate_file_exists and (f == mocked_files[0]) and overwrite
-                    )
+                    overwritten = simulate_file_exists and (f == mocked_files[0]) and overwrite
 
                 assert f"Download #{dl_index}: " in captured.out
-                assert (f"Download #{dl_index}: 0.00B" in captured.out) == (
-                    no_progress is False or overwritten is True
-                )
+                assert (f"Download #{dl_index}: 0.00B" in captured.out) == (no_progress is False or overwritten is True)
 
                 if not (simulate_file_exists or overwrite or f != mocked_files[0]):
                     dl_index += 1
@@ -1626,11 +1580,7 @@ def test_request(
         context.status_code = 400 if simulate_error else 200
         return expected_output
 
-    requests_mock_method = (
-        getattr(varvis_mockapi_with_login, method)
-        if method
-        else varvis_mockapi_with_login.get
-    )
+    requests_mock_method = getattr(varvis_mockapi_with_login, method) if method else varvis_mockapi_with_login.get
     requests_mock_method(
         MOCK_URL + endpoint.removeprefix("/"),
         json=mock_response_callback,
@@ -1673,9 +1623,7 @@ def test_request(
     assert "Logout successful" in out
 
 
-def _set_up_cmd_args_and_env_with_output(
-    tmp_path, monkeypatch, cmd, output_to_file, output_indent, further_args=None
-):
+def _set_up_cmd_args_and_env_with_output(tmp_path, monkeypatch, cmd, output_to_file, output_indent, further_args=None):
     connection_args = [
         "--api-url",
         MOCK_URL,
@@ -1755,18 +1703,13 @@ def _set_up_cmd_args_and_env_with_input(
     return cmd_args
 
 
-def _run_cmd_and_check_output(
-    capfd, output_file, output_indent, expected_output, expected_err_msg=None
-):
+def _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output, expected_err_msg=None):
     if expected_output is None:
         with pytest.raises(SystemExit):
             main()
 
         captured = capfd.readouterr()
-        expected_err_msg = (
-            expected_err_msg
-            or "Data retrieval failed for all requests. No data to write."
-        )
+        expected_err_msg = expected_err_msg or "Data retrieval failed for all requests. No data to write."
         assert expected_err_msg in captured.err
     else:
         main()

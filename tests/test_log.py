@@ -72,9 +72,7 @@ def test_cli_logger_disable_stderr_logs(caplog):
     logger.error("This should not appear in stderr logs")
 
     assert "This is an info message" in caplog.text
-    assert (
-        "This should not appear in stderr logs" in caplog.text
-    )  # still appears in stdout
+    assert "This should not appear in stderr logs" in caplog.text  # still appears in stdout
 
 
 def test_cli_logger_disable_all_logs(caplog):

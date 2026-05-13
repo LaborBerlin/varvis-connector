@@ -31,9 +31,7 @@ from ._common import (
 
 @pytest.fixture
 def varvis_with_dbg_log():
-    v = VarvisClient(
-        MOCK_URL, "mockuser", "mockpw", logger=default_logger(logging.DEBUG)
-    )
+    v = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=default_logger(logging.DEBUG))
     assert v.login()
     return v
 
@@ -84,9 +82,7 @@ def test_send_request_conn_or_timeout_error_retry_failure(
         requests.Timeout,
     ],
 )
-def test_send_request_retry_success(
-    varvis_mockapi_with_login, varvis_with_dbg_log, exception
-):
+def test_send_request_retry_success(varvis_mockapi_with_login, varvis_with_dbg_log, exception):
     # Set up the client to retry
     varvis_with_dbg_log.backoff_max_tries = 3
     varvis_with_dbg_log.backoff_factor_seconds = 0
@@ -119,9 +115,7 @@ def test_send_request_retry_success(
 
 
 @pytest.mark.parametrize("n_failed_attempts", [1, 2, 3, 99])
-def test_send_request_handles_forced_logout(
-    varvis_mockapi_with_login, varvis_with_dbg_log, n_failed_attempts
-):
+def test_send_request_handles_forced_logout(varvis_mockapi_with_login, varvis_with_dbg_log, n_failed_attempts):
     """Test that _send_request method correctly handles a forced logout (302 redirect to base URL)
     and successfully retries with re-login."""
     # Set up the client to retry
@@ -146,9 +140,7 @@ def test_send_request_handles_forced_logout(
         if request_counter["count"] == 1:
             # Simulate a forced logout with 302 redirect to base URL
             context.status_code = 302
-            context.headers["Location"] = (
-                MOCK_URL  # Redirect to base URL indicates forced logout
-            )
+            context.headers["Location"] = MOCK_URL  # Redirect to base URL indicates forced logout
             return ""
         else:
             # Subsequent requests - return successful response
@@ -160,9 +152,7 @@ def test_send_request_handles_forced_logout(
 
         if login_counter["count"] > n_failed_attempts:
             # Set CSRF token in response headers
-            context.headers["X-CSRF-TOKEN"] = (
-                f"mock-csrf-token-{login_counter['count']}"
-            )
+            context.headers["X-CSRF-TOKEN"] = f"mock-csrf-token-{login_counter['count']}"
             context.cookies["session"] = f"mock-session-{login_counter['count']}"
 
         # Return login success response

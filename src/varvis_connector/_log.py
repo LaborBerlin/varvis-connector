@@ -27,9 +27,7 @@ from ._cli_colors import style
 DEFAULT_LOG_FORMATS = {
     logging.DEBUG: style("DEBUG", fg="cyan") + " | " + style("%(message)s", fg="cyan"),
     logging.INFO: "%(message)s",
-    logging.WARNING: style("WARN ", fg="yellow")
-    + " | "
-    + style("%(message)s", fg="yellow"),
+    logging.WARNING: style("WARN ", fg="yellow") + " | " + style("%(message)s", fg="yellow"),
     logging.ERROR: style("ERROR", fg="red") + " | " + style("%(message)s", fg="red"),
     logging.CRITICAL: style("FATAL", fg="white", bg="red", bold=True)
     + " | "
@@ -41,9 +39,7 @@ DEFAULT_LOGGER_NAME = "varvis_connector"
 # mapping of log level names to their numeric values
 LOG_LEVEL_MAPPING = (
     logging.getLevelNamesMapping()  # pyright: ignore
-    if hasattr(
-        logging, "getLevelNamesMapping"
-    )  # check if this function exists (only Py >= 3.11)
+    if hasattr(logging, "getLevelNamesMapping")  # check if this function exists (only Py >= 3.11)
     else {
         "CRITICAL": 50,
         "FATAL": 50,
@@ -73,9 +69,7 @@ def cli_logger(
     if log_level_stdout == -1:
         log_level_stdout = logging.NOTSET
     elif log_level_stdout == logging.NOTSET:
-        log_level_stdout = LOG_LEVEL_MAPPING.get(
-            os.getenv("VARVIS_LOG_LEVEL", "INFO").upper(), logging.INFO
-        )
+        log_level_stdout = LOG_LEVEL_MAPPING.get(os.getenv("VARVIS_LOG_LEVEL", "INFO").upper(), logging.INFO)
     if log_level_stderr == -1:
         log_level_stderr = logging.NOTSET
     elif log_level_stderr == logging.NOTSET:
@@ -105,9 +99,7 @@ def default_logger(
     :return: A logger instance.
     """
     if log_level_stderr == logging.NOTSET:
-        log_level_stderr = LOG_LEVEL_MAPPING.get(
-            os.getenv("VARVIS_LOG_LEVEL", "INFO").upper(), logging.INFO
-        )
+        log_level_stderr = LOG_LEVEL_MAPPING.get(os.getenv("VARVIS_LOG_LEVEL", "INFO").upper(), logging.INFO)
 
     return get_logger(
         DEFAULT_LOGGER_NAME,
@@ -155,9 +147,7 @@ def get_logger(
 
     # default formatter
     if formatter is None:
-        formatter = logging.Formatter(
-            "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-        )
+        formatter = logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
 
     if remove_existing_handlers:
         # remove existing handlers first
@@ -169,23 +159,13 @@ def get_logger(
     for lvl, stream in (stdout_level, sys.__stdout__), (stderr_level, sys.__stderr__):
         if lvl != logging.NOTSET:
             hndl = logging.StreamHandler(stream)
-            hndl.set_name(
-                f"{name}_stdout" if stream is sys.__stdout__ else f"{name}_stderr"
-            )
+            hndl.set_name(f"{name}_stdout" if stream is sys.__stdout__ else f"{name}_stderr")
             hndl.setLevel(lvl)
             hndl.setFormatter(formatter)
 
-            if (
-                stream is sys.__stdout__
-                and stderr_level != logging.NOTSET
-                and stderr_level > stdout_level
-            ):
+            if stream is sys.__stdout__ and stderr_level != logging.NOTSET and stderr_level > stdout_level:
                 hndl.addFilter(LogMaxFilter(stderr_level))
-            elif (
-                stream is sys.__stderr__
-                and stdout_level != logging.NOTSET
-                and stdout_level >= stderr_level
-            ):
+            elif stream is sys.__stderr__ and stdout_level != logging.NOTSET and stdout_level >= stderr_level:
                 hndl.addFilter(LogMaxFilter(stdout_level - 1))
 
             logger.addHandler(hndl)
@@ -232,10 +212,7 @@ class MultiFormatter(PrettyExceptionFormatter):
 
         formats = formats or DEFAULT_LOG_FORMATS
 
-        self.formatters = {
-            level: PrettyExceptionFormatter(fmt, **kwargs)
-            for level, fmt in formats.items()
-        }
+        self.formatters = {level: PrettyExceptionFormatter(fmt, **kwargs) for level, fmt in formats.items()}
 
     def format(self, record: logging.LogRecord) -> str:
         formatter = self.formatters.get(record.levelno)
