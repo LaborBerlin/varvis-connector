@@ -154,18 +154,10 @@ class CnvAnnotations(BaseModel):
     DECIPHER_sig: list[str] | str | None = Field(default=None, alias="DECIPHER:sig")
     DECIPHER_type: list[str] | str | None = Field(default=None, alias="DECIPHER:type")
     DECIPHER_found: int | list[Any] | None = Field(default=None, alias="DECIPHER:found")
-    ALLEXES_CNV_sig_gain: list[str] | str | None = Field(
-        default=None, alias="ALLEXES_CNV:sig_gain"
-    )
-    ALLEXES_CNV_sig_loss: list[str] | str | None = Field(
-        default=None, alias="ALLEXES_CNV:sig_loss"
-    )
-    ALLEXES_CNV_found_gain: int | None = Field(
-        default=None, alias="ALLEXES_CNV:found_gain"
-    )
-    ALLEXES_CNV_found_loss: int | None = Field(
-        default=None, alias="ALLEXES_CNV:found_loss"
-    )
+    ALLEXES_CNV_sig_gain: list[str] | str | None = Field(default=None, alias="ALLEXES_CNV:sig_gain")
+    ALLEXES_CNV_sig_loss: list[str] | str | None = Field(default=None, alias="ALLEXES_CNV:sig_loss")
+    ALLEXES_CNV_found_gain: int | None = Field(default=None, alias="ALLEXES_CNV:found_gain")
+    ALLEXES_CNV_found_loss: int | None = Field(default=None, alias="ALLEXES_CNV:found_loss")
     localFoundGain: int | None = None
     localFoundLoss: int | None = None
     localSignificanceGain: list[Any] | str | None = None
@@ -194,9 +186,7 @@ class PendingCnvDataItem(BaseModel):
     log2Value: float
     refSpread: float
     copyNumber: int
-    type: Literal["LOSS", "GAIN"] | None = (
-        None  # based on the example, assuming only LOSS or GAIN
-    )
+    type: Literal["LOSS", "GAIN"] | None = None  # based on the example, assuming only LOSS or GAIN
     position: GenomicPosition
     regionInfo: str | None = None
     exactBreakpointBegin: bool
@@ -206,9 +196,7 @@ class PendingCnvDataItem(BaseModel):
     regionIndexBegin: int
     regionIndexEnd: int
     mosaic: bool
-    mosaicRelation: str | None = (
-        None  # unsure about this type; only every saw "null" in sample data
-    )
+    mosaicRelation: str | None = None  # unsure about this type; only every saw "null" in sample data
     analysisId: int
     relativeAnalysisIds: list[int]
     comment: str | None = None
@@ -222,15 +210,11 @@ class PendingCnvDataItem(BaseModel):
     localFoundLoss: int
     localSignificanceGain: list[Any] = []
     localSignificanceLoss: list[Any] = []
-    overlapOperator: Literal[
-        "AND", "OR"
-    ]  # unsure about these possible values; only every saw "AND" in sample data
+    overlapOperator: Literal["AND", "OR"]  # unsure about these possible values; only every saw "AND" in sample data
     overlapParam: float
     otherOverlapParam: float
     commentCount: int
-    recentComment: str | None = (
-        None  # unsure about this type; only every saw "null" in sample data
-    )
+    recentComment: str | None = None  # unsure about this type; only every saw "null" in sample data
     annotations: CnvAnnotations
     relativesData: dict[str, CnvRelativesDataItem] = {}
 
@@ -443,9 +427,7 @@ class AnalysisItem(BaseModel):
     id: int
     analysisType: AnalysisType  # according to API docs
     status: AnalysisStatus  # according to API docs
-    regulatoryStatus: Literal[
-        "UNKNOWN", "IN_VITRO_DIAGNOSTIC", "RESEARCH_USE_ONLY", "PERFORMANCE_STUDY_ONLY"
-    ]
+    regulatoryStatus: Literal["UNKNOWN", "IN_VITRO_DIAGNOSTIC", "RESEARCH_USE_ONLY", "PERFORMANCE_STUDY_ONLY"]
     sourceId: str | None = None
     sampleId: str | None = None
     sampleOrigin: SampleOriginType | None = None
@@ -491,9 +473,7 @@ class PersonPersonalInformation(BaseModel):
     birthDate: date | None = None
     country: str | None = None
     consentType: Literal["FULL_CONSENT", "NO_CONSENT", "UNKNOWN"] | None = None
-    validationStatus: (
-        Literal["UNKNOWN", "FLAGGED", "PROCESSED", "VALIDATED", "DELETING"] | None
-    ) = None
+    validationStatus: Literal["UNKNOWN", "FLAGGED", "PROCESSED", "VALIDATED", "DELETING"] | None = None
 
 
 class PersonHpoTermDiseaseModifier(BaseModel):
@@ -568,35 +548,19 @@ class PersonUpdateData(BaseModel):
     Generated from API documentation.
     """
 
-    id: str = Field(
-        description="The custom ID for this person, e.g. as used in the LIMS system."
-    )
-    familyId: str | None = Field(
-        default=None, description="The ID of this person's family."
-    )
+    id: str = Field(description="The custom ID for this person, e.g. as used in the LIMS system.")
+    familyId: str | None = Field(default=None, description="The ID of this person's family.")
     firstName: str | None = Field(default=None, description="The person's first name.")
     lastName: str | None = Field(default=None, description="The person's last name.")
-    comment: str | None = Field(
-        default=None, description="A free-text comment on the person."
-    )
+    comment: str | None = Field(default=None, description="A free-text comment on the person.")
     sex: Literal["MALE", "FEMALE", "UNKNOWN", "INTERSEX"] | None = Field(
         default=None, description="The biological sex of the person."
     )
-    birthDateYear: int | None = Field(
-        default=None, description="The year of the birth date."
-    )
-    birthDateMonth: int | None = Field(
-        default=None, description="The month of the birth date."
-    )
-    birthDateDay: int | None = Field(
-        default=None, description="The day of the birth date."
-    )
-    country: str | None = Field(
-        default=None, description="The name of the person's home country."
-    )
-    hpoTermIds: list[str] | None = Field(
-        default=None, description="The list of the person's HPO term ids."
-    )
+    birthDateYear: int | None = Field(default=None, description="The year of the birth date.")
+    birthDateMonth: int | None = Field(default=None, description="The month of the birth date.")
+    birthDateDay: int | None = Field(default=None, description="The day of the birth date.")
+    country: str | None = Field(default=None, description="The name of the person's home country.")
+    hpoTermIds: list[str] | None = Field(default=None, description="The list of the person's HPO term ids.")
 
 
 class PersonReportItem(BaseModel):
@@ -804,9 +768,7 @@ class CaseReport(BaseModel):
     approved: datetime | None = None
     title: str | None = None
     comment: str | None = None
-    reportState: str | None = (
-        None  # TODO: may be possible to narrow this to set of discrete states
-    )
+    reportState: str | None = None  # TODO: may be possible to narrow this to set of discrete states
     items: list[
         Annotated[
             CaseReportVirtualPanelItem | CaseReportMethodsItem | CaseReportPersonItem,
@@ -888,18 +850,10 @@ class VirtualPanelUpdateData(BaseModel):
         "is specified it must belong to an existing virtual panel.",
     )
     name: str = Field(description="The virtual panel name.")
-    active: bool = Field(
-        description="The virtual panel active state, if not active it can't be used."
-    )
-    geneIds: list[int] = Field(
-        description="Gene ids of genes that should be associated with this virtual panel."
-    )
-    description: str | None = Field(
-        default=None, description="Optional description of the virtual panel."
-    )
-    personId: int | None = Field(
-        default=None, description="Optional id of the bound person."
-    )
+    active: bool = Field(description="The virtual panel active state, if not active it can't be used.")
+    geneIds: list[int] = Field(description="Gene ids of genes that should be associated with this virtual panel.")
+    description: str | None = Field(default=None, description="Optional description of the virtual panel.")
+    personId: int | None = Field(default=None, description="Optional id of the bound person.")
 
 
 class ApiFileLink(BaseModel):

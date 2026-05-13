@@ -62,9 +62,7 @@ DEFAULT_HTTP_ERROR_MESSAGES = {
 TModel = TypeVar("TModel", bound=BaseModel)
 
 
-def _jsondata_from_response(
-    resp: Response, data_from_key: str
-) -> list | dict | str | float | int | bool | None:
+def _jsondata_from_response(resp: Response, data_from_key: str) -> list | dict | str | float | int | bool | None:
     """Convert API response to JSON and extract data from the specified key. Handle reported errors."""
     jsondata = resp.json()
     if not jsondata.get("success", False):
@@ -74,14 +72,10 @@ def _jsondata_from_response(
         assert isinstance(extracted, list | dict | str | float | int | bool | None)
         return extracted
     except KeyError as e:
-        raise VarvisError(
-            f"Response does not contain expected data key '{data_from_key}'"
-        ) from e
+        raise VarvisError(f"Response does not contain expected data key '{data_from_key}'") from e
 
 
-def _parse_response_for_model(
-    model_class: Type[TModel], resp: Response, data_from_key: str | None = None
-) -> TModel:
+def _parse_response_for_model(model_class: Type[TModel], resp: Response, data_from_key: str | None = None) -> TModel:
     """Parse response data using the specified model class. Handle data validation errors."""
     data: str | dict
     if data_from_key:
@@ -121,9 +115,7 @@ def _parse_response_for_model_list(
         try:
             return_data.append(cls_validation_method(item))
         except ValidationError as e:
-            raise VarvisError(
-                f"Response validation failed for data item #{i}: {e}"
-            ) from e
+            raise VarvisError(f"Response validation failed for data item #{i}: {e}") from e
     return return_data
 
 
@@ -143,9 +135,7 @@ def _parse_response_for_primitive(
     return data
 
 
-def _raise_varvis_error(
-    error_data: dict[str, str | None], custom_error_msg: str = ""
-) -> None:
+def _raise_varvis_error(error_data: dict[str, str | None], custom_error_msg: str = "") -> None:
     """
     Helper function to raise a VarvisError with am optional custom error message and all information provided by
     the API.
@@ -192,9 +182,7 @@ class VarvisClient:
     """
 
     api_url: str = field(metadata={"help": "Varvis API URL", "envvar": "VARVIS_URL"})
-    username: str = field(
-        metadata={"help": "Varvis credentials username", "envvar": "VARVIS_USER"}
-    )
+    username: str = field(metadata={"help": "Varvis credentials username", "envvar": "VARVIS_USER"})
     password: str = field(metadata={"help": "Varvis credentials password"})
     https_proxy: str | None = field(
         default=None,
@@ -207,9 +195,7 @@ class VarvisClient:
             "argname": "disable-ssl-verify",
         },
     )
-    connection_timeout: float = field(
-        default=10.0, metadata={"help": "Timeout in seconds for API requests"}
-    )
+    connection_timeout: float = field(default=10.0, metadata={"help": "Timeout in seconds for API requests"})
     backoff_factor_seconds: float = field(
         default=0.5,
         metadata={"help": "Base factor for exponential backoff between retries"},
@@ -274,9 +260,7 @@ class VarvisClient:
 
     @classmethod
     def from_env(cls) -> "VarvisClient":
-        url, username, password = [
-            os.getenv("VARVIS_" + s, "") for s in ("URL", "USER", "PASSWORD")
-        ]
+        url, username, password = [os.getenv("VARVIS_" + s, "") for s in ("URL", "USER", "PASSWORD")]
 
         kwargs = {}
         for key in {
@@ -376,13 +360,9 @@ class VarvisClient:
         if not loggedin_csrf:
             # it seems the varvis API responds with HTTP 200 OK in case the login fails, but doesn't return a CSRF in that case
             if raise_for_status:
-                raise VarvisError(
-                    "Login failed (CSRF token not found in login response)"
-                )
+                raise VarvisError("Login failed (CSRF token not found in login response)")
             else:
-                self.logger.error(
-                    "Login failed (CSRF token not found in login response)"
-                )
+                self.logger.error("Login failed (CSRF token not found in login response)")
                 self._reset_state_on_logout()
                 return False
 
@@ -474,9 +454,7 @@ class VarvisClient:
         analysis_ids = [analysis_ids] if isinstance(analysis_ids, int) else analysis_ids
 
         if not analysis_ids:
-            raise ValueError(
-                "Parameter `analysis_ids` must be either an integer a non-empty list of integers"
-            )
+            raise ValueError("Parameter `analysis_ids` must be either an integer a non-empty list of integers")
 
         self.logger.info(
             "Getting CNV target results for person LIMS-ID %s, analysis IDs %s%s",
@@ -555,9 +533,7 @@ class VarvisClient:
         if person_id is None and person_lims_id is None:
             raise ValueError("Either `person_id` or `person_lims_id` must be provided")
         if person_id is not None and person_lims_id is not None:
-            raise ValueError(
-                "Only one of `person_id` or `person_lims_id` can be provided"
-            )
+            raise ValueError("Only one of `person_id` or `person_lims_id` can be provided")
 
         if person_lims_id is not None:
             self.logger.info("LIMS-ID is given; will retrieve internal person ID first")
@@ -566,9 +542,7 @@ class VarvisClient:
         analysis_ids = [analysis_ids] if isinstance(analysis_ids, int) else analysis_ids
 
         if not analysis_ids:
-            raise ValueError(
-                "Parameter `analysis_ids` must be either an integer a non-empty list of integers"
-            )
+            raise ValueError("Parameter `analysis_ids` must be either an integer a non-empty list of integers")
 
         self.logger.info(
             "Getting pending CNV segments for person internal ID %d, analysis IDs %s%s",
@@ -579,9 +553,7 @@ class VarvisClient:
 
         # note: the CNV target results endpoint uses analysisIds (with "i") as the parameter name, this endpoint uses
         # analysesIds (with "e") -- crazy varvis API!
-        query_params = f"personId={person_id}&" + "&".join(
-            f"analysesIds={a_id}" for a_id in analysis_ids
-        )
+        query_params = f"personId={person_id}&" + "&".join(f"analysesIds={a_id}" for a_id in analysis_ids)
         if virtual_panel_id:
             query_params += f"&virtualPanelId={virtual_panel_id}"
 
@@ -606,9 +578,7 @@ class VarvisClient:
         :raises VarvisError: If no metric results data for the provided LIMS ID is found
             or if the response validation fails.
         """
-        self.logger.info(
-            'Getting QC case metrics for person LIMS ID "%s"', person_lims_id
-        )
+        self.logger.info('Getting QC case metrics for person LIMS ID "%s"', person_lims_id)
 
         resp = self._send_request(
             "GET",
@@ -621,9 +591,7 @@ class VarvisClient:
         try:
             metric_results = data["metricResults"].pop(person_lims_id)
         except KeyError:
-            raise VarvisError(
-                f"No metric results data for person with LIMS ID {person_lims_id} found in response"
-            )
+            raise VarvisError(f"No metric results data for person with LIMS ID {person_lims_id} found in response")
 
         data["metricResults"] = metric_results
 
@@ -632,9 +600,7 @@ class VarvisClient:
         except ValidationError as e:
             raise VarvisError(f"Response validation failed: {e}") from e
 
-    def get_coverage_data(
-        self, person_lims_id: str, virtual_panel_id: int | None = 1
-    ) -> list[CoverageData]:
+    def get_coverage_data(self, person_lims_id: str, virtual_panel_id: int | None = 1) -> list[CoverageData]:
         """
         Retrieves coverage data for a specified person LIMS ID and optional virtual panel ID.
 
@@ -673,9 +639,7 @@ class VarvisClient:
         )
         return _parse_response_for_model_list(CoverageData, resp)
 
-    def get_analyses(
-        self, analysis_ids: int | list[int] | None = None
-    ) -> list[AnalysisItem]:
+    def get_analyses(self, analysis_ids: int | list[int] | None = None) -> list[AnalysisItem]:
         """
         Retrieves a list of analysis items from the varvis API. Optionally allows to filter by analysis IDs.
 
@@ -723,9 +687,7 @@ class VarvisClient:
         )
         return _parse_response_for_model(PersonData, resp, data_from_key="response")
 
-    def create_or_update_person(
-        self, person_data: PersonUpdateData | dict[str, Any]
-    ) -> int:
+    def create_or_update_person(self, person_data: PersonUpdateData | dict[str, Any]) -> int:
         """
         Allows to create a new person entry, or updates an existing one. Only the id field is required.
         Fields that are null will not override existing values on update.
@@ -750,9 +712,7 @@ class VarvisClient:
                     "validated against the PersonUpdateData schema"
                 ) from e
 
-        self.logger.info(
-            'Creating or updating person record with LIMS-ID "%s"', person_data.id
-        )
+        self.logger.info('Creating or updating person record with LIMS-ID "%s"', person_data.id)
 
         resp = self._send_modeldata(
             "person",
@@ -764,13 +724,9 @@ class VarvisClient:
         try:
             return int(resp.content)
         except ValueError:
-            raise VarvisError(
-                "Response could not be parsed. Expected internal person ID as integer."
-            )
+            raise VarvisError("Response could not be parsed. Expected internal person ID as integer.")
 
-    def get_case_report(
-        self, person_lims_id: str, draft: bool = False, inactive: bool = False
-    ) -> CaseReport:
+    def get_case_report(self, person_lims_id: str, draft: bool = False, inactive: bool = False) -> CaseReport:
         """
         Retrieve a case report for a given person LIMS-ID.
 
@@ -849,9 +805,7 @@ class VarvisClient:
         )
         return _parse_response_for_model_list(AnalysisItem, resp)
 
-    def find_analyses_by_filename(
-        self, filename: str | list[str]
-    ) -> list[FindByInputFileNameAnalysisItem]:
+    def find_analyses_by_filename(self, filename: str | list[str]) -> list[FindByInputFileNameAnalysisItem]:
         """
         Find analyses by searching for the given filename components within customer-provided input file names.
 
@@ -867,9 +821,7 @@ class VarvisClient:
         filename = [f for f in (f.strip() for f in filename) if f]
 
         if len(filename) == 0:
-            raise ValueError(
-                "Parameter `filename` must be a non-empty string or a non-empty list of strings"
-            )
+            raise ValueError("Parameter `filename` must be a non-empty string or a non-empty list of strings")
 
         self.logger.info(
             "Getting analyses by searching for filename component(s) %s",
@@ -880,9 +832,7 @@ class VarvisClient:
             "GET",
             "analysis-list/find-by-customer-provided-input-file-name?" + query_param,
         )
-        return _parse_response_for_model_list(
-            FindByInputFileNameAnalysisItem, resp, data_from_key="response"
-        )
+        return _parse_response_for_model_list(FindByInputFileNameAnalysisItem, resp, data_from_key="response")
 
     def get_virtual_panel_summaries(self) -> list[VirtualPanelSummary]:
         """
@@ -898,9 +848,7 @@ class VarvisClient:
         self.logger.info("Getting virtual panel summaries")
 
         resp = self._send_request("GET", "virtual-panels")
-        return _parse_response_for_model_list(
-            VirtualPanelSummary, resp, data_from_key="response"
-        )
+        return _parse_response_for_model_list(VirtualPanelSummary, resp, data_from_key="response")
 
     def get_virtual_panel(self, virtual_panel_id: int) -> VirtualPanelData:
         """
@@ -917,13 +865,9 @@ class VarvisClient:
 
         resp = self._send_request("GET", f"virtual-panel/{virtual_panel_id}")
         try:
-            return _parse_response_for_model(
-                VirtualPanelData, resp, data_from_key="response"
-            )
+            return _parse_response_for_model(VirtualPanelData, resp, data_from_key="response")
         except VarvisError as exc:
-            raise VarvisError(
-                f"Virtual panel with ID {virtual_panel_id} not found"
-            ) from exc
+            raise VarvisError(f"Virtual panel with ID {virtual_panel_id} not found") from exc
 
     def get_all_genes(self) -> list[VarvisGene]:
         """
@@ -939,9 +883,7 @@ class VarvisClient:
         self.logger.info("Getting all genes")
 
         resp = self._send_request("GET", "virtual-panel-genes")
-        return _parse_response_for_model_list(
-            VarvisGene, resp, data_from_key="response"
-        )
+        return _parse_response_for_model_list(VarvisGene, resp, data_from_key="response")
 
     def get_file_download_links(self, analysis_id: int) -> AnalysisFileDownloadLinks:
         """
@@ -959,13 +901,9 @@ class VarvisClient:
             f"analysis/{analysis_id}/get-file-download-links",
             handle_http_errors={400: "Analysis with given ID was not found."},
         )
-        return _parse_response_for_model(
-            AnalysisFileDownloadLinks, resp, data_from_key="response"
-        )
+        return _parse_response_for_model(AnalysisFileDownloadLinks, resp, data_from_key="response")
 
-    def create_or_update_virtual_panel(
-        self, virtual_panel_data: VirtualPanelUpdateData | dict[str, Any]
-    ) -> int:
+    def create_or_update_virtual_panel(self, virtual_panel_data: VirtualPanelUpdateData | dict[str, Any]) -> int:
         """
         Creates or updates a virtual panel entry based on the provided data. If the
         provided data doesn't include an ID, a new virtual panel will be created. If
@@ -980,9 +918,7 @@ class VarvisClient:
         """
         if isinstance(virtual_panel_data, dict):
             try:
-                virtual_panel_data = VirtualPanelUpdateData.model_validate(
-                    virtual_panel_data
-                )
+                virtual_panel_data = VirtualPanelUpdateData.model_validate(virtual_panel_data)
             except ValidationError as e:
                 raise ValueError(
                     "Parameter `virtual_panel_data` must be a VirtualPanelUpdateData instance or a dictionary that "
@@ -1055,20 +991,14 @@ class VarvisClient:
             )
 
         # first only collect the valid download links
-        valid_download_links: dict[
-            str, Path
-        ] = {}  # maps link to output file path string
+        valid_download_links: dict[str, Path] = {}  # maps link to output file path string
         for link_object in download_links.apiFileLinks:
             if link_object.fileName is None or link_object.downloadLink is None:
                 continue
 
             output_file_name = link_object.fileName.strip()
 
-            if (
-                output_file_name in {"", ".", ".."}
-                or "\0" in output_file_name
-                or "/" in output_file_name
-            ):
+            if output_file_name in {"", ".", ".."} or "\0" in output_file_name or "/" in output_file_name:
                 self.logger.error(
                     '> Skipping file "%s" because it has an invalid name',
                     output_file_name,
@@ -1077,10 +1007,7 @@ class VarvisClient:
 
             if file_patterns:
                 output_file_name_lwr = output_file_name.lower()
-                if not any(
-                    fnmatchcase(output_file_name_lwr, pat.lower())
-                    for pat in file_patterns
-                ):
+                if not any(fnmatchcase(output_file_name_lwr, pat.lower()) for pat in file_patterns):
                     self.logger.info(
                         '> Skipping file "%s" because it does not match any of the provided patterns',
                         output_file_name,
@@ -1089,8 +1016,7 @@ class VarvisClient:
 
             if link_object.currentlyArchived:
                 self.logger.error(
-                    '> Skipping file "%s" because it is marked as currently archived with '
-                    "estimated restore time %s",
+                    '> Skipping file "%s" because it is marked as currently archived with estimated restore time %s',
                     output_file_name,
                     link_object.estimatedRestoreTime,
                 )
@@ -1100,9 +1026,7 @@ class VarvisClient:
 
             if output_file_path.exists():
                 if allow_overwrite:
-                    self.logger.warning(
-                        '> Will overwrite existing file "%s"', output_file_path
-                    )
+                    self.logger.warning('> Will overwrite existing file "%s"', output_file_path)
                 else:
                     self.logger.error(
                         '> Skipping file "%s" because it already exists at "%s"',
@@ -1202,9 +1126,7 @@ class VarvisClient:
                     size /= 1024.0
                 return f"{size:.2f} PB"
 
-            resp = requests.get(
-                url, stream=True, verify=ssl_verify, timeout=connection_timeout
-            )
+            resp = requests.get(url, stream=True, verify=ssl_verify, timeout=connection_timeout)
 
             if not resp.ok:
                 logger.error(
@@ -1243,9 +1165,7 @@ class VarvisClient:
                                 progress_bar.update(len(chunk))
                             f.write(chunk)
                 except (requests.HTTPError, requests.ConnectionError, OSError) as e:
-                    logging.error(
-                        f"Download #{download_num + 1}: Error while downloading the file: {e}"
-                    )
+                    logging.error(f"Download #{download_num + 1}: Error while downloading the file: {e}")
                     return False
 
             return True
@@ -1376,9 +1296,7 @@ class VarvisClient:
         :return: The response from the HTTP request.
         """
         data = model.model_dump()
-        return self._send_request(
-            method, endpoint, handle_http_errors=handle_http_errors, json=data
-        )
+        return self._send_request(method, endpoint, handle_http_errors=handle_http_errors, json=data)
 
     def _send_request(
         self,
@@ -1435,10 +1353,7 @@ class VarvisClient:
                     "virtual-panel",
                     "virtual-panel-genes",
                 }
-                or (
-                    urlpart_components[0] == "person"
-                    and urlpart_components[-1] == "analyses"
-                )
+                or (urlpart_components[0] == "person" and urlpart_components[-1] == "analyses")
             ) or (urlpart_components[0] == "virtual-panel" and method != "GET"):
                 endpoint = "api/" + endpoint
 
@@ -1483,19 +1398,15 @@ class VarvisClient:
                         timeout=self.connection_timeout,
                         **kwargs,
                     )
-                    self.logger.debug(
-                        "Response received with status code %d", resp.status_code
-                    )
+                    self.logger.debug("Response received with status code %d", resp.status_code)
 
-                    if resp.status_code == 302 and resp.headers.get(
-                        "Location", ""
-                    ).removesuffix("/") == self.api_url.removesuffix("/"):
+                    if resp.status_code == 302 and resp.headers.get("Location", "").removesuffix(
+                        "/"
+                    ) == self.api_url.removesuffix("/"):
                         # Varvis API quirk: in case there are too many concurrent requests for the same session, the session
                         # seems to be invalidated and the response is a redirect to the base URL; we need to login again after
                         # waiting a bit
-                        self.logger.debug(
-                            "Possible forced logout from API detected -- will try to login again"
-                        )
+                        self.logger.debug("Possible forced logout from API detected -- will try to login again")
                         retry = True
                         self._reset_state_on_logout()
                         resp = None
@@ -1515,9 +1426,7 @@ class VarvisClient:
                 break
 
         if resp is None:
-            raise VarvisError(
-                f"Failed to send request to Varvis API after {self.backoff_max_tries} tries"
-            )
+            raise VarvisError(f"Failed to send request to Varvis API after {self.backoff_max_tries} tries")
 
         if handle_http_errors and resp.status_code in handle_http_errors:
             custom_error_msg = handle_http_errors[resp.status_code]

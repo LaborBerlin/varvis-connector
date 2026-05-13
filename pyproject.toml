@@ -72,6 +72,9 @@ exclude-newer = "7 days"      # implement dependency cooldown: ignore updates re
 # temporarily exclude pip from dep. cooldown to get the latest vuln. fix
 exclude-newer-package = { pip = false }
 
+[tool.ruff]
+line-length = 120
+
 [tool.ruff.lint]
 # rules to ingore:
 # - F811: Redefinition of unused variable; we have to do this with pytest fixtures

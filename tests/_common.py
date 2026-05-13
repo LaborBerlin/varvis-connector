@@ -45,10 +45,7 @@ def create_varvis_mockapi_downloads(
     fname_prepend="",
 ):
     mocked_extensions = ["bam", "gz", "bai", "vcf", "archive"]
-    mocked_files = [
-        f"{fname_prepend}mock-file{i}.{ext}"
-        for i, ext in enumerate(mocked_extensions, 1)
-    ]
+    mocked_files = [f"{fname_prepend}mock-file{i}.{ext}" for i, ext in enumerate(mocked_extensions, 1)]
 
     for f in mocked_files:
         mockapi.get("https://mock-dl/" + f, content=b"testdata")

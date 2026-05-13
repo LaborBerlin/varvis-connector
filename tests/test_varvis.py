@@ -62,9 +62,7 @@ class PersonUpdateDataFactory(ModelFactory):
 
 def _get_varvis_instance(init_data):
     url, username, password, https_proxy, ssl_verify = init_data
-    v = VarvisClient(
-        url, username, password, https_proxy=https_proxy, ssl_verify=ssl_verify
-    )
+    v = VarvisClient(url, username, password, https_proxy=https_proxy, ssl_verify=ssl_verify)
 
     if not v.login():  # pragma: no cover
         pytest.fail("Failed to login")
@@ -155,9 +153,7 @@ def test_from_env(
         monkeypatch_clean_env.setenv("VARVIS_SSL_VERIFY", "0")
 
     monkeypatch_clean_env.setenv("VARVIS_CONNECTION_TIMEOUT", str(connection_timeout))
-    monkeypatch_clean_env.setenv(
-        "VARVIS_BACKOFF_FACTOR_SECONDS", str(backoff_factor_seconds)
-    )
+    monkeypatch_clean_env.setenv("VARVIS_BACKOFF_FACTOR_SECONDS", str(backoff_factor_seconds))
     monkeypatch_clean_env.setenv("VARVIS_BACKOFF_MAX_TRIES", str(backoff_max_tries))
 
     v = VarvisClient.from_env()
@@ -178,17 +174,13 @@ def test_from_env(
 def test_post_init(varvis_init_data):
     url, username, password, https_proxy, ssl_verify = varvis_init_data
     url = url.removesuffix("/")
-    v = VarvisClient(
-        url, username, password, https_proxy=https_proxy, ssl_verify=ssl_verify
-    )
+    v = VarvisClient(url, username, password, https_proxy=https_proxy, ssl_verify=ssl_verify)
     assert v.api_url == url + "/"
 
 
 def test_login(varvis_init_data):
     url, username, password, https_proxy, ssl_verify = varvis_init_data
-    v = VarvisClient(
-        url, username, password, https_proxy=https_proxy, ssl_verify=ssl_verify
-    )
+    v = VarvisClient(url, username, password, https_proxy=https_proxy, ssl_verify=ssl_verify)
     assert not v.logged_in
     assert v.login()
     sess = v._session
@@ -226,9 +218,7 @@ def test_login_fail(varvis_init_data):
 
 
 def test_no_credentials_leakage_in_str_repr():
-    varvis = VarvisClient(
-        "https://example.com/", username="test-USERNAME", password="test-PASSWORD"
-    )
+    varvis = VarvisClient("https://example.com/", username="test-USERNAME", password="test-PASSWORD")
     internal_attrs = [attr for attr in dir(varvis) if attr.startswith("_")]
 
     for func in (str, repr):
@@ -248,10 +238,7 @@ def test_logout(varvis):
 
 def test_not_logged_in(monkeypatch_clean_env):
     var_suffixes = ("URL", "USER", "PASSWORD")
-    env_vars = [
-        os.getenv(var, "")
-        for var in [f"VARVIS_TEST_PLAYGROUND_{s}" for s in var_suffixes]
-    ]
+    env_vars = [os.getenv(var, "") for var in [f"VARVIS_TEST_PLAYGROUND_{s}" for s in var_suffixes]]
     if None in env_vars:  # pragma: no cover
         pytest.fail(
             "At least one of the following environment variables is missing for running tests with the "
@@ -263,9 +250,7 @@ def test_not_logged_in(monkeypatch_clean_env):
 
     v = VarvisClient.from_env()
 
-    with pytest.raises(
-        VarvisError, match="Session not initialized -- you need to login first"
-    ):
+    with pytest.raises(VarvisError, match="Session not initialized -- you need to login first"):
         v.get_internal_person_id("lims-123-doesnt-matter")
 
 
@@ -321,31 +306,21 @@ def test_get_cnv_target_results(
     data_can_be_empty,
 ):
     if isinstance(analysis_ids, list) and not analysis_ids:
-        with pytest.raises(
-            ValueError, match="must be either an integer a non-empty list of integers"
-        ):
-            varvis.get_cnv_target_results(
-                person_lims_id, analysis_ids, virtual_panel_id
-            )
+        with pytest.raises(ValueError, match="must be either an integer a non-empty list of integers"):
+            varvis.get_cnv_target_results(person_lims_id, analysis_ids, virtual_panel_id)
     else:
         if expect_error:
             with pytest.raises(VarvisError, match=expect_error):
-                varvis.get_cnv_target_results(
-                    person_lims_id, analysis_ids, virtual_panel_id
-                )
+                varvis.get_cnv_target_results(person_lims_id, analysis_ids, virtual_panel_id)
         else:
-            res = varvis.get_cnv_target_results(
-                person_lims_id, analysis_ids, virtual_panel_id
-            )
+            res = varvis.get_cnv_target_results(person_lims_id, analysis_ids, virtual_panel_id)
             assert isinstance(res, CnvTargetResults)
             if not data_can_be_empty:
                 assert res.data
             assert res.targetRegionsHeader
 
 
-@pytest.mark.parametrize(
-    "person_lims_id", ["200000000", "OCI3-QK333-Zelllinie-dx-twist", "notexistent"]
-)
+@pytest.mark.parametrize("person_lims_id", ["200000000", "OCI3-QK333-Zelllinie-dx-twist", "notexistent"])
 def test_get_internal_person_id(varvis, person_lims_id):
     if person_lims_id == "notexistent":
         with pytest.raises(
@@ -385,9 +360,7 @@ def test_get_pending_cnv_segments(
         analysis_ids=analysis_ids,
         virtual_panel_id=virtual_panel_id,
     )
-    if (person_id is None and person_lims_id is None) or (
-        person_id is not None and person_lims_id is not None
-    ):
+    if (person_id is None and person_lims_id is None) or (person_id is not None and person_lims_id is not None):
         with pytest.raises(ValueError, match="`person_id` or `person_lims_id`"):
             varvis.get_pending_cnv_segments(**kwargs)
     elif analysis_ids is None:
@@ -441,9 +414,7 @@ def test_get_coverage_data(varvis, person_lims_id, virtual_panel_id, expect_erro
         with pytest.raises(VarvisError, match=expect_error):
             varvis.get_coverage_data(person_lims_id, virtual_panel_id=virtual_panel_id)
     else:
-        res = varvis.get_coverage_data(
-            person_lims_id, virtual_panel_id=virtual_panel_id
-        )
+        res = varvis.get_coverage_data(person_lims_id, virtual_panel_id=virtual_panel_id)
         assert isinstance(res, list)
         assert len(res) > 0
         assert all(isinstance(item, CoverageData) for item in res)
@@ -511,7 +482,9 @@ def test_create_or_update_person(varvis, data_as_dict, simulate_validation_error
         )
         for attr in check_person_attrs:
             if attr == "sex" and model.sex is None:
-                expected_value = "UNKNOWN"  # another Varvis API quirk: passing None leads to storing this data as "UNKNOWN"
+                expected_value = (
+                    "UNKNOWN"  # another Varvis API quirk: passing None leads to storing this data as "UNKNOWN"
+                )
             else:
                 expected_value = getattr(model, attr)
             assert getattr(person_stored.personalInformation, attr) == expected_value
@@ -533,9 +506,7 @@ def test_create_or_update_person(varvis, data_as_dict, simulate_validation_error
 
     # check server-side validation error
     if simulate_validation_error:
-        with pytest.raises(
-            VarvisError, match="Could not create or update person entry"
-        ):
+        with pytest.raises(VarvisError, match="Could not create or update person entry"):
             # simulate invalid LIMS ID
             model = PersonUpdateData(id="")
             varvis.create_or_update_person(model)
@@ -546,9 +517,7 @@ def test_create_or_update_person(varvis, data_as_dict, simulate_validation_error
 
     # create a model with auto-generated data
     hpo_term_ids = ["HP:0025337", "HP:0001386", "HP:0003037"]
-    hpo_term_sample = random.sample(
-        hpo_term_ids, k=random.randint(0, len(hpo_term_ids))
-    )
+    hpo_term_sample = random.sample(hpo_term_ids, k=random.randint(0, len(hpo_term_ids)))
     model = PersonUpdateDataFactory.build(
         id=lims_id,
         birthDateYear=1999,
@@ -581,9 +550,7 @@ def test_create_or_update_person(varvis, data_as_dict, simulate_validation_error
             "birthDateYear": 1999,
         }
     else:
-        update = PersonUpdateData(
-            id=lims_id, birthDateYear=1999, birthDateMonth=10, birthDateDay=9
-        )
+        update = PersonUpdateData(id=lims_id, birthDateYear=1999, birthDateMonth=10, birthDateDay=9)
     assert varvis.create_or_update_person(update) == internal_pers_id
 
     # fetch data using get-person endpoint and compare again
@@ -649,9 +616,7 @@ def test_get_case_report(varvis, person_lims_id, draft, inactive, expect_error):
 
     res = varvis.get_case_report(person_lims_id, draft=draft, inactive=inactive)
     assert isinstance(res, CaseReport)
-    assert (
-        res.draft == draft
-    )  # requesting a draft always returns a draft, even if a final report already exists
+    assert res.draft == draft  # requesting a draft always returns a draft, even if a final report already exists
 
     if res.personId is not None:
         assert res.personId == internal_person_id
@@ -674,17 +639,13 @@ def test_get_case_report(varvis, person_lims_id, draft, inactive, expect_error):
         elif isinstance(item, CaseReportMethodsItem):
             assert item.type == "METHODS"
             assert len(item.analyses) > 0
-            assert all(
-                isinstance(analysis, CaseReportAnalysis) for analysis in item.analyses
-            )
+            assert all(isinstance(analysis, CaseReportAnalysis) for analysis in item.analyses)
         else:  # CaseReportPersonItem
             assert item.type == "PERSON"
             assert item.personId == internal_person_id
             assert item.limsId == person_lims_id
             assert len(item.analyses) > 0
-            assert all(
-                isinstance(analysis, CaseReportAnalysis) for analysis in item.analyses
-            )
+            assert all(isinstance(analysis, CaseReportAnalysis) for analysis in item.analyses)
 
 
 @pytest.mark.parametrize(
@@ -722,9 +683,7 @@ def test_find_analyses_by_filename(varvis, filename, expect_empty, expect_error)
             assert len(res) == 0
         else:
             assert len(res) > 0
-            assert all(
-                isinstance(item, FindByInputFileNameAnalysisItem) for item in res
-            )
+            assert all(isinstance(item, FindByInputFileNameAnalysisItem) for item in res)
 
 
 @pytest.mark.parametrize(
@@ -781,9 +740,7 @@ def test_get_all_genes(varvis):
         (False, True),
     ],
 )
-def test_create_or_update_virtual_panel(
-    varvis, data_as_dict, simulate_validation_error
-):
+def test_create_or_update_virtual_panel(varvis, data_as_dict, simulate_validation_error):
     if data_as_dict:
         # check validation
         with pytest.raises(
@@ -797,9 +754,7 @@ def test_create_or_update_virtual_panel(
     if simulate_validation_error:
         with pytest.raises(VarvisError, match="Varvis API request did not succeed"):
             # simulate invalid geneIds (empty)
-            model = VirtualPanelUpdateData(
-                name="lbrbln-test-will-fail", active=True, geneIds=[]
-            )
+            model = VirtualPanelUpdateData(name="lbrbln-test-will-fail", active=True, geneIds=[])
             varvis.create_or_update_virtual_panel(model)
         return
 
@@ -807,9 +762,7 @@ def test_create_or_update_virtual_panel(
     name = "lbrbln-test-" + str(uuid.uuid4())
 
     # create a model without ID -> will create a VP
-    model = VirtualPanelUpdateData(
-        name=name, active=True, geneIds=[24309, 50200], description="An automated test."
-    )
+    model = VirtualPanelUpdateData(name=name, active=True, geneIds=[24309, 50200], description="An automated test.")
     if data_as_dict:
         data = model.model_dump()
     else:
@@ -961,9 +914,7 @@ def test_download_files(
                 file_name_lwr = file_name_or_url.lower()
                 if isinstance(file_patterns, str):
                     file_patterns = [file_patterns]
-                assert any(
-                    fnmatchcase(file_name_lwr, pat.lower()) for pat in file_patterns
-                )
+                assert any(fnmatchcase(file_name_lwr, pat.lower()) for pat in file_patterns)
 
         if simulate_file_exists and not allow_overwrite:
             assert mocked_files[0] not in res
@@ -976,9 +927,7 @@ def test_download_files(
 def test_download_files_param_errors(varvis, tmp_path):
     with pytest.raises(ValueError, match="Output path does not exist: "):
         varvis.download_files(1, "/foo/bar")
-    with pytest.raises(
-        ValueError, match="Parameter `max_parallel_downloads` must be at least 1"
-    ):
+    with pytest.raises(ValueError, match="Parameter `max_parallel_downloads` must be at least 1"):
         varvis.download_files(1, tmp_path, max_parallel_downloads=0)
 
 
@@ -1004,9 +953,7 @@ def test_request_get(varvis, endpoint, handle_errors, expect_error):
                 handle_http_errors=handle_errors,
             )
     else:
-        res = varvis.request(
-            endpoint, raise_for_status=handle_errors, handle_http_errors=handle_errors
-        )
+        res = varvis.request(endpoint, raise_for_status=handle_errors, handle_http_errors=handle_errors)
 
         assert isinstance(res, Response)
 

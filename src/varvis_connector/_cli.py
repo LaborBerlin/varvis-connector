@@ -79,9 +79,7 @@ class _CmdBase(ABC):
             default="-",
             help="Output JSON file. If not given, output will be printed to stdout.",
         )
-        argparser.add_argument(
-            "--output-indent", type=int, default=None, help="Output JSON indentation."
-        )
+        argparser.add_argument("--output-indent", type=int, default=None, help="Output JSON indentation.")
 
     @classmethod
     def _set_arguments_for_fileinput(
@@ -98,10 +96,7 @@ class _CmdBase(ABC):
         )
 
     def _parse_virtual_panel_id(self) -> int | None:
-        if (
-            isinstance(self.parsed_args.virtual_panel_id, str)
-            and self.parsed_args.virtual_panel_id.lower() == "none"
-        ):
+        if isinstance(self.parsed_args.virtual_panel_id, str) and self.parsed_args.virtual_panel_id.lower() == "none":
             return None
 
         try:
@@ -137,9 +132,7 @@ class _CmdBase(ABC):
                 serializable_data = data.model_dump(mode="json")
             else:
                 if not allow_empty_data and len(data) == 0:
-                    self.logger.error(
-                        "Data retrieval failed for all requests. No data to write."
-                    )
+                    self.logger.error("Data retrieval failed for all requests. No data to write.")
                     exit(1)
 
                 serializable_data = recursive_model_to_json(data)
@@ -190,9 +183,7 @@ class _AutoLoginCmdBase(_CmdBase):
 @dataclass(frozen=True)
 class _ArbitraryRequestCmd(_AutoLoginCmdBase):
     command: ClassVar[str] = "request"
-    help: ClassVar[str] = (
-        "Perform an arbitrary authenticated request to a Varvis API endpoint."
-    )
+    help: ClassVar[str] = "Perform an arbitrary authenticated request to a Varvis API endpoint."
     _http_methods: ClassVar[tuple[str, ...]] = (
         "get",
         "post",
@@ -251,9 +242,7 @@ class _ArbitraryRequestCmd(_AutoLoginCmdBase):
             else:
                 self.logger.info("Sending JSON input data")
                 input_json = json.loads(input_data)
-                self.logger.debug(
-                    f"JSON input data:\n{json.dumps(input_json, indent=2)}"
-                )
+                self.logger.debug(f"JSON input data:\n{json.dumps(input_json, indent=2)}")
                 kwargs = {"json": input_json}
 
         # send request and catch some common API error codes
@@ -295,9 +284,7 @@ class _GetInternalPersonIdCmd(_AutoLoginCmdBase):
             try:
                 output_data[lims_id] = self.client.get_internal_person_id(lims_id)
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve internal person ID for LIMS-ID {lims_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve internal person ID for LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -333,9 +320,7 @@ class _GetSnvAnnotations(_AutoLoginCmdBase):
             except ValueError:
                 self.logger.warning(f'Provided analysis ID "{a_id}" is not an integer.')
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve SNV annotations for analysis ID {a_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve SNV annotations for analysis ID {a_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -391,9 +376,7 @@ class _GetCnvTargetResults(_AutoLoginCmdBase):
                 virtual_panel_id=virtual_panel_id,
             )
         except Exception as exc:
-            self.logger.error(
-                f'Could not retrieve CNV target results for LIMS-ID "{self.parsed_args.lims_id}": {exc}'
-            )
+            self.logger.error(f'Could not retrieve CNV target results for LIMS-ID "{self.parsed_args.lims_id}": {exc}')
             exit(1)
 
         self._write_file_output(output_data)
@@ -419,8 +402,7 @@ class _GetPendingCnvSegments(_AutoLoginCmdBase):
         )
         lims_or_internal_id.add_argument(
             "--internal-person-id",
-            help="Internal varvis person ID for which to retrieve results. Either "
-            "this or --lims-id must be provided.",
+            help="Internal varvis person ID for which to retrieve results. Either this or --lims-id must be provided.",
         )
 
         argparser.add_argument(
@@ -469,9 +451,7 @@ class _GetPendingCnvSegments(_AutoLoginCmdBase):
                 if self.parsed_args.lims_id
                 else f"internal person ID {self.parsed_args.internal_person_id}"
             )
-            self.logger.error(
-                f"Could not retrieve pending CNV segments for {id_info}: {exc}"
-            )
+            self.logger.error(f"Could not retrieve pending CNV segments for {id_info}: {exc}")
             exit(1)
 
         self._write_file_output(output_data)
@@ -495,9 +475,7 @@ class _GetQcCaseMetricsCmd(_AutoLoginCmdBase):
             try:
                 output_data[lims_id] = self.client.get_qc_case_metrics(lims_id)
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve QC case metrics for person LIMS-ID {lims_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve QC case metrics for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -531,13 +509,9 @@ class _GetCoverageData(_AutoLoginCmdBase):
         output_data: dict[str, list[CoverageData]] = {}
         for lims_id in self.parsed_args.lims_ids:
             try:
-                output_data[lims_id] = self.client.get_coverage_data(
-                    lims_id, virtual_panel_id
-                )
+                output_data[lims_id] = self.client.get_coverage_data(lims_id, virtual_panel_id)
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve coverage data for person LIMS-ID {lims_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve coverage data for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -583,9 +557,7 @@ class _GetReportInfoForPersons(_AutoLoginCmdBase):
 @dataclass(frozen=True)
 class _GetPersonAnalyses(_AutoLoginCmdBase):
     command: ClassVar[str] = "get-person-analyses"
-    help: ClassVar[str] = (
-        "Get basic information about analyses for given person LIMS-ID(s)."
-    )
+    help: ClassVar[str] = "Get basic information about analyses for given person LIMS-ID(s)."
 
     @classmethod
     def set_up_arguments(cls, argparser: argparse.ArgumentParser) -> None:
@@ -600,9 +572,7 @@ class _GetPersonAnalyses(_AutoLoginCmdBase):
             try:
                 output_data[lims_id] = self.client.get_person_analyses(lims_id)
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve analyses for person LIMS-ID {lims_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve analyses for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -610,9 +580,7 @@ class _GetPersonAnalyses(_AutoLoginCmdBase):
 @dataclass(frozen=True)
 class _GetCaseReport(_AutoLoginCmdBase):
     command: ClassVar[str] = "get-case-report"
-    help: ClassVar[str] = (
-        "Retrieves case report information for given person LIMS-ID(s)."
-    )
+    help: ClassVar[str] = "Retrieves case report information for given person LIMS-ID(s)."
 
     @classmethod
     def set_up_arguments(cls, argparser: argparse.ArgumentParser) -> None:
@@ -641,9 +609,7 @@ class _GetCaseReport(_AutoLoginCmdBase):
                     inactive=self.parsed_args.inactive,
                 )
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve analyses for person LIMS-ID {lims_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve analyses for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -651,9 +617,7 @@ class _GetCaseReport(_AutoLoginCmdBase):
 @dataclass(frozen=True)
 class _GetPerson(_AutoLoginCmdBase):
     command: ClassVar[str] = "get-person"
-    help: ClassVar[str] = (
-        "Retrieves person data including clinical information for given person LIMS-ID(s)."
-    )
+    help: ClassVar[str] = "Retrieves person data including clinical information for given person LIMS-ID(s)."
 
     @classmethod
     def set_up_arguments(cls, argparser: argparse.ArgumentParser) -> None:
@@ -668,9 +632,7 @@ class _GetPerson(_AutoLoginCmdBase):
             try:
                 output_data[lims_id] = self.client.get_person(lims_id)
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve person information for person LIMS-ID {lims_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve person information for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -712,7 +674,9 @@ class _CreateOrUpdatePerson(_AutoLoginCmdBase):
             if fieldname == "birthDate":
                 description = "The person's birthdate given in YYYY-MM-DD format."
             elif fieldname == "hpoTermIds":
-                description = 'A list of HPO term IDs (in the form of "HP:0123456") that are associated with the person.'
+                description = (
+                    'A list of HPO term IDs (in the form of "HP:0123456") that are associated with the person.'
+                )
             else:
                 description = PersonUpdateData.model_fields[fieldname].description or ""
 
@@ -756,16 +720,12 @@ class _CreateOrUpdatePerson(_AutoLoginCmdBase):
             self.logger.debug("Data provided via CLI arguments")
             lims_id = data_from_args.get("id")
             if lims_id is None:
-                self.logger.error(
-                    "The LIMS ID must be provided when passing person data via CLI arguments."
-                )
+                self.logger.error("The LIMS ID must be provided when passing person data via CLI arguments.")
                 exit(1)
             try:
                 person_data = PersonUpdateData.model_validate(data_from_args)
             except ValidationError as exc:
-                self.logger.error(
-                    f"The provided data passed as CLI arguments is not valid:\n{exc}"
-                )
+                self.logger.error(f"The provided data passed as CLI arguments is not valid:\n{exc}")
                 exit(1)
         else:
             # if no CLI arguments were given, check if data was provided via stdin or file
@@ -782,9 +742,7 @@ class _CreateOrUpdatePerson(_AutoLoginCmdBase):
             person_data.model_dump_json(indent=2),
         )
         internal_pers_id = self.client.create_or_update_person(person_data)
-        self.logger.info(
-            f"Successfully created or updated person with internal person ID {internal_pers_id}"
-        )
+        self.logger.info(f"Successfully created or updated person with internal person ID {internal_pers_id}")
 
 
 @dataclass(frozen=True)
@@ -811,9 +769,7 @@ class _FindAnalysesByFilename(_AutoLoginCmdBase):
 
         output_data = None
         try:
-            output_data = self.client.find_analyses_by_filename(
-                self.parsed_args.filename
-            )
+            output_data = self.client.find_analyses_by_filename(self.parsed_args.filename)
         except Exception as exc:
             self.logger.error(f"Error while searching for analyses by filename: {exc}")
 
@@ -847,9 +803,7 @@ class _GetVirtualPanel(_AutoLoginCmdBase):
             try:
                 output_data[vp_id] = self.client.get_virtual_panel(vp_id)
             except Exception as exc:
-                self.logger.warning(
-                    f"Error while retrieving virtual panel {vp_id}: {exc}"
-                )
+                self.logger.warning(f"Error while retrieving virtual panel {vp_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -858,8 +812,7 @@ class _GetVirtualPanel(_AutoLoginCmdBase):
 class _GetVirtualPanelSummaries(_AutoLoginCmdBase):
     command: ClassVar[str] = "get-virtual-panel-summaries"
     help: ClassVar[str] = (
-        "Retrieves the summaries for all virtual panels, except for the virtual panel "
-        "containing all genes."
+        "Retrieves the summaries for all virtual panels, except for the virtual panel containing all genes."
     )
 
     @classmethod
@@ -934,7 +887,9 @@ class _CreateOrUpdateVirtualPanelBase(_AutoLoginCmdBase):
                 if fieldname == "id":
                     description = "The virtual panel id for the panel to be updated."
                 elif fieldname == "active":
-                    description = "Set this flag in order to activate the virtual panel (has precedence over --inactive)."
+                    description = (
+                        "Set this flag in order to activate the virtual panel (has precedence over --inactive)."
+                    )
                 else:
                     description = fieldinfo.description or ""
             else:
@@ -944,14 +899,10 @@ class _CreateOrUpdateVirtualPanelBase(_AutoLoginCmdBase):
             if argname in {"active", "inactive"}:
                 arg_kwarg["action"] = "store_true"
             else:
-                arg_kwarg["type"] = (
-                    int if argname in {"id", "gene-ids", "person-id"} else str
-                )
+                arg_kwarg["type"] = int if argname in {"id", "gene-ids", "person-id"} else str
                 arg_kwarg["nargs"] = "+" if argname == "gene-ids" else None
 
-            argparser.add_argument(
-                f"--{argname}", default=None, help=description, **arg_kwarg
-            )
+            argparser.add_argument(f"--{argname}", default=None, help=description, **arg_kwarg)
 
         cls._set_arguments_for_fileinput(
             argparser,
@@ -977,11 +928,7 @@ class _CreateOrUpdateVirtualPanelBase(_AutoLoginCmdBase):
             data_from_args["active"] = self.parsed_args.active or False
 
             # apply inactive flag
-            if (
-                not self.create
-                and "inactive" in data_from_args
-                and "active" not in data_from_args
-            ):
+            if not self.create and "inactive" in data_from_args and "active" not in data_from_args:
                 data_from_args["active"] = False
                 del data_from_args["inactive"]
 
@@ -999,9 +946,7 @@ class _CreateOrUpdateVirtualPanelBase(_AutoLoginCmdBase):
         vp_id = model_data.get("id")
         if self.create:
             if vp_id is not None:
-                self.logger.error(
-                    "When creating a new virtual panel, no ID must be given."
-                )
+                self.logger.error("When creating a new virtual panel, no ID must be given.")
                 exit(1)
         else:
             if vp_id is None:
@@ -1018,9 +963,7 @@ class _CreateOrUpdateVirtualPanelBase(_AutoLoginCmdBase):
             try:
                 existing_vp_data = self.client.get_virtual_panel(vp_id).model_dump()
             except VarvisError:
-                self.logger.error(
-                    "Could not retrieve existing virtual panel data for ID %d", vp_id
-                )
+                self.logger.error("Could not retrieve existing virtual panel data for ID %d", vp_id)
                 exit(1)
 
             for fieldname in self.virtual_panel_fields_to_args.keys():
@@ -1045,13 +988,9 @@ class _CreateOrUpdateVirtualPanelBase(_AutoLoginCmdBase):
         )
         internal_vp_id = self.client.create_or_update_virtual_panel(vp_data)
         if vp_data.id is None:
-            self.logger.info(
-                f"Successfully created virtual panel with ID {internal_vp_id}"
-            )
+            self.logger.info(f"Successfully created virtual panel with ID {internal_vp_id}")
         else:
-            self.logger.info(
-                f"Successfully updated virtual panel with ID {internal_vp_id}"
-            )
+            self.logger.info(f"Successfully updated virtual panel with ID {internal_vp_id}")
 
 
 @dataclass(frozen=True)
@@ -1103,13 +1042,9 @@ class _GetFileDownloadLinks(_AutoLoginCmdBase):
         for analysis_id in self.parsed_args.analysis_ids:
             try:
                 analysis_id = int(analysis_id)
-                output_data[str(analysis_id)] = self.client.get_file_download_links(
-                    analysis_id
-                )
+                output_data[str(analysis_id)] = self.client.get_file_download_links(analysis_id)
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve file download links for analysis ID {analysis_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve file download links for analysis ID {analysis_id}: {exc}")
 
         self._write_file_output(output_data)
 
@@ -1172,9 +1107,7 @@ class _DownloadFiles(_AutoLoginCmdBase):
         output_dir = Path(self.parsed_args.output_dir)
 
         if not output_dir.is_dir():
-            self.logger.error(
-                f"Output directory does not exist: {output_dir.absolute()}"
-            )
+            self.logger.error(f"Output directory does not exist: {output_dir.absolute()}")
             return
 
         try:
@@ -1188,19 +1121,13 @@ class _DownloadFiles(_AutoLoginCmdBase):
             try:
                 analysis_id = int(analysis_id)
             except ValueError:
-                self.logger.warning(
-                    f"Invalid analysis ID (must be an integer): {analysis_id}"
-                )
+                self.logger.warning(f"Invalid analysis ID (must be an integer): {analysis_id}")
 
             if analysis_foldername_template := self.parsed_args.create_folder_per_id:
-                if isinstance(
-                    analysis_foldername_template, str
-                ):  # used as string value
+                if isinstance(analysis_foldername_template, str):  # used as string value
                     if "%ID" not in analysis_foldername_template:
                         analysis_foldername_template += "%ID"
-                    analysis_foldername = analysis_foldername_template.replace(
-                        "%ID", str(analysis_id)
-                    )
+                    analysis_foldername = analysis_foldername_template.replace("%ID", str(analysis_id))
                 else:  # used as flag and set to True
                     analysis_foldername = str(analysis_id)
 
@@ -1224,9 +1151,7 @@ class _DownloadFiles(_AutoLoginCmdBase):
                     only_collect_urls=True,
                 )
             except Exception as exc:
-                self.logger.warning(
-                    f"Could not retrieve file download links for analysis ID {analysis_id}: {exc}"
-                )
+                self.logger.warning(f"Could not retrieve file download links for analysis ID {analysis_id}: {exc}")
                 continue
 
             for url in urls_and_paths_for_analysis:
@@ -1245,9 +1170,7 @@ class _DownloadFiles(_AutoLoginCmdBase):
 
         self.logger.info("Starting the following downloads:")
         for i, (url, target_path) in enumerate(urls_and_target_paths.items(), 1):
-            self.logger.info(
-                f'Download #{i}: "{target_path.name}" -> "{target_path.parent}"'
-            )
+            self.logger.info(f'Download #{i}: "{target_path.name}" -> "{target_path.parent}"')
 
         # actually download the files
         show_progress = not self.parsed_args.no_progress
@@ -1367,26 +1290,20 @@ class VarvisCLI:
                 argname = field.metadata.get("argname", field.name.replace("_", "-"))
                 kwargs = {
                     "dest": field.name,
-                    "help": field.metadata["help"] + "."
-                    if "help" in field.metadata
-                    else "",
+                    "help": field.metadata["help"] + "." if "help" in field.metadata else "",
                     "default": None,
                 }
                 if field.type is bool:
                     kwargs["action"] = "store_false" if field.default else "store_true"
                 else:
                     if isinstance(field.type, UnionType):
-                        types_not_none = [
-                            t for t in field.type.__args__ if t is not None
-                        ]
+                        types_not_none = [t for t in field.type.__args__ if t is not None]
                         if len(types_not_none) == 1:
                             kwargs["type"] = types_not_none[0]
                     else:
                         kwargs["type"] = field.type
 
-                config_envvar_name: str = field.metadata.get(
-                    "envvar", f"VARVIS_{field.name.upper()}"
-                )
+                config_envvar_name: str = field.metadata.get("envvar", f"VARVIS_{field.name.upper()}")
 
                 type_func: Callable = kwargs.get(  # type: ignore
                     "type",
@@ -1404,14 +1321,10 @@ class VarvisCLI:
                 self._argparser.add_argument(f"--{argname}", **kwargs)  # type: ignore
 
         # set up version argument
-        self._argparser.add_argument(
-            "--version", action="version", version=f"varvis_connector v{__version__}"
-        )
+        self._argparser.add_argument("--version", action="version", version=f"varvis_connector v{__version__}")
 
         # set up log level
-        lvls = [
-            lvl.lower() for lvl in LOG_LEVEL_MAPPING if lvl not in {"NOTSET", "WARN"}
-        ] + ["off"]
+        lvls = [lvl.lower() for lvl in LOG_LEVEL_MAPPING if lvl not in {"NOTSET", "WARN"}] + ["off"]
         self._argparser.add_argument(
             "--loglevel",
             choices=lvls,
@@ -1444,9 +1357,7 @@ class VarvisCLI:
                     try:
                         opt_val = type_func(opt_val)
                     except ValueError:
-                        raise RuntimeError(
-                            f'The provided value for option "{opt_argname}" could not be parsed.'
-                        )
+                        raise RuntimeError(f'The provided value for option "{opt_argname}" could not be parsed.')
 
             if opt_val is not None:
                 client_config[opt_fieldname] = opt_val
@@ -1469,14 +1380,10 @@ class VarvisCLI:
 
         level_stdout = log_level_value
         level_stderr = (
-            -1
-            if log_level_value == -1
-            else (logging.ERROR if log_level_value < logging.ERROR else logging.NOTSET)
+            -1 if log_level_value == -1 else (logging.ERROR if log_level_value < logging.ERROR else logging.NOTSET)
         )
 
-        if getattr(self._parsed_args, "output", None) is sys.__stdout__ or int(
-            os.getenv("TEST_WRITES_TO_STDOUT", "0")
-        ):
+        if getattr(self._parsed_args, "output", None) is sys.__stdout__ or int(os.getenv("TEST_WRITES_TO_STDOUT", "0")):
             # in case file output is printed to stdout, we want to log to stderr only
             level_stderr = level_stdout
             level_stdout = -1
