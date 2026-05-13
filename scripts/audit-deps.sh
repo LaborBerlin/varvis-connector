@@ -29,4 +29,4 @@ for exclude_pkg in "$@"; do
 done
 
 echo "Auditing dependencies ..."
-uv run pip-audit --disable-pip --aliases -r "$reqfile"
+uvx --system-certs --exclude-newer "7 days" pip-audit --disable-pip --aliases -r "$reqfile"

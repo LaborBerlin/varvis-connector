@@ -46,6 +46,9 @@ jobs:
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    env:
+      UV_SYSTEM_CERTS: "true"
+      UV_EXCLUDE_NEWER: "7 days"
 
     steps:
       - uses: actions/checkout@v6
@@ -61,16 +64,16 @@ jobs:
       - name: Check commit messages
         # it's enough to run this for a single Python version
         if: ${{ matrix.python-version == '3.12' }}
-        run: uv run git-cliff -u > /dev/null
+        run: uvx git-cliff -u > /dev/null
 
       - name: Run code format check via ruff
-        run: uv run ruff format --diff
+        run: uvx ruff format --diff
 
       - name: Run linter via ruff
-        run: uv run ruff check --output-format=github
+        run: uvx ruff check --output-format=github
 
       - name: Run type checks
-        run: uv run basedpyright
+        run: uvx basedpyright
 
       - name: Run security linter bandit
-        run: uv run bandit -c pyproject.toml -r src/
+        run: uvx bandit -c pyproject.toml -r src/
