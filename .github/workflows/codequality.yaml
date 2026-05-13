@@ -76,4 +76,6 @@ jobs:
         run: uvx basedpyright
 
       - name: Run security linter bandit
-        run: uvx bandit -c pyproject.toml -r src/
+        run: |
+          uv tool install bandit[toml]
+          bandit -c pyproject.toml -r src/
