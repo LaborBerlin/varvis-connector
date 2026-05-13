@@ -45,6 +45,7 @@ Run the full repo checks expected for non-trivial code changes:
 
 ```bash
 test -f .env && set -a && source .env && set +a
+make audit
 ruff check
 ruff format
 basedpyright
