@@ -68,7 +68,7 @@ Create an ``.env`` file and add the URL and credentials for the Varvis playgroun
 
 To disable SSL verification for the test, set ``VARVIS_TEST_SSL_VERIFY=0`` in the ``.env`` file.
 
-Install `uv <https://docs.astral.sh/uv/>`_, then install all dependencies via and set up pre-commit::
+Install `uv <https://docs.astral.sh/uv/>`_, then install all dependencies and required tools and set up pre-commit::
 
     make init_dev
 
@@ -87,23 +87,15 @@ These checks are also run in CI (see below).
 
 Ruff linter::
 
-    uv run ruff check
+    ruff check
 
 Ruff format check::
 
-    uv run ruff format --diff
+    ruff format --diff
 
 Pyright type checks::
 
-    uv run basedpyright src/
-
-Commit preparation
-------------------
-
-Before commiting, you can run the same “pre-commit does its thing” flow locally
-(including folding the README to 120 chars)::
-
-    make commit_prep
+    basedpyright src/
 
 Testing
 -------

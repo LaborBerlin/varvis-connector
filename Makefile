@@ -8,11 +8,19 @@
 
 .PHONY: build docs
 SHELL := /bin/bash
+TOOLS := pre-commit ruff git-cliff pip-audit basedpyright bandit[toml]
+export UV_SYSTEM_CERTS := true
+export UV_EXCLUDE_NEWER := 7 days
 
 # initialize development
 init_dev: depsync
-	uv run pre-commit install && \
-		uv run pre-commit run
+	for t in $(TOOLS); do \
+		uv tool install "$$t"; \
+	done
+	uv tool update-shell
+	pre-commit install
+	pre-commit autoupdate
+	pre-commit install-hooks
 
 # synchronize dependencies between pyproject.toml and the virtual environment;
 # will install dependencies required in pyproject.toml but not installed in venv
@@ -27,7 +35,10 @@ depsync:
 depupgrade:
 	uv lock -U
 	uv sync --all-groups --all-extras
-	uv run pre-commit autoupdate
+	for t in $(TOOLS); do \
+		uv tool upgrade "$$t"; \
+	done
+	pre-commit autoupdate
 
 # just check for possible updates; is used in dependencies_update.yaml GHA workflow
 depcheck:
@@ -45,11 +56,6 @@ pkgupgrade:
 # fold the readme to 120 chars line length max.
 fold_readme:
 	fold -s -w 120 < README.md > README.md.tmp && mv README.md.tmp README.md
-
-# commit preparation (run twice to see if there are issues left after ruff auto fixes)
-commit_prep: fold_readme
-	git add -A . && uv run pre-commit run; \
-		git add -A . && uv run pre-commit run
 
 # run test coverage
 coverage:
@@ -103,7 +109,7 @@ audit:
 
 # (re-)generate the changelog
 changelog:
-	uv run git-cliff -o CHANGELOG.md --tag "v$$(uv version | cut -d" " -f2)"
+	git-cliff -o CHANGELOG.md --tag "v$$(uv version | cut -d" " -f2)"
 	pandoc -f gfm -t rst --columns=120 -o docs/source/changelog.rst CHANGELOG.md
 
 # prepare a pull request: generate changelog, optionally bump the version,
