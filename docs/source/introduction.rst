@@ -14,12 +14,20 @@ Introduction
 .. image:: https://github.com/LaborBerlin/varvis-connector/raw/refs/heads/badges/pr/pr-latest.svg
    :alt: Test coverage
 
-The ``varvis-connector`` package provides a Python interface for the Varvis API. It includes both a command-line interface (CLI) and a Python package with a client implementation. The package handles authentication, session management, and provides methods to retrieve various types of genomic data including SNV annotations, CNV target results, and CNV segments. It supports environment-based configuration and includes comprehensive error handling.
+The ``varvis-connector`` package
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. image:: _static/varvis_name.svg
+   :alt: varvis logo
+   :width: 25%
+   :align: right
+
+The ``varvis-connector`` package provides a Python interface for the varvis® API. It includes both a command-line interface (CLI) and a Python package with a client implementation. The package handles authentication, session management, and provides methods to retrieve various types of genomic data including SNV annotations, CNV target results, and CNV segments. It supports environment-based configuration and includes comprehensive error handling.
 
 Features
 ~~~~~~~~
 
-* Python client for the Varvis API
+* Python client for the varvis® API
 * Command-line interface for direct interaction with the API
 * Authentication and session management
 * Methods to retrieve various types of genomic data
@@ -27,8 +35,8 @@ Features
 * Comprehensive error handling
 * Support for Python 3.10 and above
 
-Currently covered Varvis API endpoints
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Currently covered varvis® API endpoints
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 The following API endpoints are currently covered both by the CLI and the Python package:
 
@@ -36,8 +44,8 @@ The following API endpoints are currently covered both by the CLI and the Python
    :widths: 30 20 30 20
    :header-rows: 1
 
-   * - Varvis API endpoint
-     - Varvis docs title
+   * - varvis® API endpoint
+     - varvis® docs title
      - CLI command ``varvis_connector ...``
      - :any:`VarvisClient` method
    * - ``GET /api/person/{personLimsId}/id``
@@ -117,3 +125,10 @@ License
 ~~~~~~~
 
 This project is licensed under the GNU General Public License v3.0 (GPLv3). See the LICENSE file for details.
+
+Disclaimer
+~~~~~~~~~~
+
+The varvis® logo is a registered trademark of Limbus Medical Technologies GmbH and is used in this project with
+permission. This project is independent and is not affiliated with, endorsed by, or officially supported by Limbus
+Medical Technologies GmbH.
