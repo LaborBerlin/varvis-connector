@@ -1,6 +1,21 @@
 Changelog
 =========
 
+.. _022---2026-05-27:
+
+0.2.2 - 2026-05-27
+------------------
+
+Documentation
+~~~~~~~~~~~~~
+
+- Add varvis logo and disclaimer
+
+Other
+~~~~~
+
+- Update dependencies with fixed security vulnerabilities
+
 .. _021---2026-05-13:
 
 0.2.1 - 2026-05-13
@@ -18,10 +33,14 @@ Development
 - Don't overwrite commit message when amending the vers. bump commit
 - Require ``make audit`` in update-dependencies skill
 
+.. _documentation-1:
+
 Documentation
 ~~~~~~~~~~~~~
 
 - Fix link and typo in installation section
+
+.. _other-1:
 
 Other
 ~~~~~
@@ -50,14 +69,14 @@ CI
 - Add docs pages workflow
 - Set up publishing to PyPI and GitHub releases
 
-.. _documentation-1:
+.. _documentation-2:
 
 Documentation
 ~~~~~~~~~~~~~
 
 - Add GPLv3 license and respective notes
 
-.. _other-1:
+.. _other-2:
 
 Other
 ~~~~~
