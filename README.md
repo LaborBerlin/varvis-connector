@@ -1,4 +1,4 @@
-# Varvis API Python package
+# varvis® API Python package
 
 ![CI testing pipeline](https://github.com/LaborBerlin/varvis-connector/actions/workflows/tests.yaml/badge.svg)
 ![CI code quality
@@ -9,7 +9,11 @@ Authors: Markus Konrad <markus.konrad@laborberlin.com>, Bernt Popp <bernt.popp@l
 
 ## Summary
 
-The `varvis-connector` package provides a Python interface for the Varvis API. It includes both a command-line interface
+<p align="center">
+<img alt="varvis logo" src="docs/source/_static/varvis_name.svg" style="width:25%; height:auto;">
+</p>
+
+The `varvis-connector` package provides a Python interface for the varvis® API. It includes both a command-line interface
 (CLI) and a Python package with a client implementation. The package handles authentication, session management, and
 provides methods to retrieve various types of genomic data including SNV annotations, CNV target results, and CNV
 segments. It supports environment-based configuration and includes comprehensive error handling.
@@ -32,3 +36,9 @@ It covers:
 - Python package API documentation
 - Development guide
 - Changelog
+
+## Disclaimer
+
+The varvis® logo is a registered trademark of Limbus Medical Technologies GmbH and is used in this project with
+permission. This project is independent and is not affiliated with, endorsed by, or officially supported by Limbus
+Medical Technologies GmbH.
