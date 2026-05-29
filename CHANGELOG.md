@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.2.post1 - 2026-05-29
+
+### Documentation
+
+- Add intended use, use absolute url for logo (fixes display on PyPI) and improve docs in `build_and_release` workflow
+
 ## 0.2.2 - 2026-05-27
 
 ### Documentation

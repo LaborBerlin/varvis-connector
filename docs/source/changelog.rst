@@ -1,10 +1,22 @@
 Changelog
 =========
 
+.. _022post1---2026-05-29:
+
+0.2.2.post1 - 2026-05-29
+------------------------
+
+Documentation
+~~~~~~~~~~~~~
+
+- Add intended use, use absolute url for logo (fixes display on PyPI) and improve docs in ``build_and_release`` workflow
+
 .. _022---2026-05-27:
 
 0.2.2 - 2026-05-27
 ------------------
+
+.. _documentation-1:
 
 Documentation
 ~~~~~~~~~~~~~
@@ -33,7 +45,7 @@ Development
 - Don't overwrite commit message when amending the vers. bump commit
 - Require ``make audit`` in update-dependencies skill
 
-.. _documentation-1:
+.. _documentation-2:
 
 Documentation
 ~~~~~~~~~~~~~
@@ -69,7 +81,7 @@ CI
 - Add docs pages workflow
 - Set up publishing to PyPI and GitHub releases
 
-.. _documentation-2:
+.. _documentation-3:
 
 Documentation
 ~~~~~~~~~~~~~
