@@ -11,8 +11,9 @@
 # - tests
 #
 # After their success, the "build" job will build the package which triggers
-# publishing the package artifacts to GitHub pages and PyPI. Finally, the
-# "docs" workflow is triggered to generate and publish the documentation.
+# publishing the package artifacts to GitHub releases and PyPI. Finally, the
+# "docs" workflow is triggered to generate and publish the documentation to
+# GitHub pages.
 
 name: Build and package release orchestration
 
