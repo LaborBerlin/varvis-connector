@@ -32,9 +32,10 @@ on:
 
   workflow_call: # can be called by release workflow
 
-  schedule:
-    # run at 1:25am each wednesday
-    - cron: "25 1 * * 3"
+  # weekly dependency audit is disabled -- we rely on GitHub dependabot alerts for this
+  # schedule:
+  #   # run at 1:25am each wednesday
+  #   - cron: "25 1 * * 3"
 
 jobs:
   dependencies_audit:
