@@ -51,7 +51,7 @@ jobs:
       UV_EXCLUDE_NEWER: "7 days"
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Install uv and set up Python ${{ matrix.python-version }}
         uses: astral-sh/setup-uv@v8.1.0
