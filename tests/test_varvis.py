@@ -75,9 +75,9 @@ def varvis_init_data():
     env_vars = [f"VARVIS_TEST_PLAYGROUND_{s}" for s in ("URL", "USER", "PASSWORD")]
     init_data: list[str | bool | None] = [os.getenv(var) for var in env_vars]
 
-    if None in init_data:  # pragma: no cover
-        pytest.fail(
-            "At least one of the following environment variables is missing for running tests with the "
+    if not all(init_data):  # pragma: no cover
+        pytest.skip(
+            "At least one of the following environment variables is missing or empty for running tests with the "
             "Varvis playground: " + ", ".join(env_vars)
         )
 
@@ -238,11 +238,11 @@ def test_logout(varvis):
 
 def test_not_logged_in(monkeypatch_clean_env):
     var_suffixes = ("URL", "USER", "PASSWORD")
-    env_vars = [os.getenv(var, "") for var in [f"VARVIS_TEST_PLAYGROUND_{s}" for s in var_suffixes]]
-    if None in env_vars:  # pragma: no cover
-        pytest.fail(
-            "At least one of the following environment variables is missing for running tests with the "
-            "Varvis playground: " + ", ".join(env_vars)
+    env_vars = [os.getenv(f"VARVIS_TEST_PLAYGROUND_{s}", "") for s in var_suffixes]
+    if not all(env_vars):  # pragma: no cover
+        pytest.skip(
+            "At least one of the following environment variables is missing or empty for running tests with the "
+            "Varvis playground: " + ", ".join(f"VARVIS_TEST_PLAYGROUND_{s}" for s in var_suffixes)
         )
 
     for suffix, value in zip(var_suffixes, env_vars):
