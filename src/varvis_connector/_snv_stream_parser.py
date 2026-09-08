@@ -64,10 +64,10 @@ def resolve_header_indices(header: Sequence[Any]) -> dict[str, int]:
             if "title" in item and item["title"]:
                 item_names.append(str(item["title"]).lower())
         else:
-            if hasattr(item, "id") and getattr(item, "id"):
-                item_names.append(str(getattr(item, "id")).lower())
-            if hasattr(item, "title") and getattr(item, "title"):
-                item_names.append(str(getattr(item, "title")).lower())
+            if hasattr(item, "id") and item.id:
+                item_names.append(str(item.id).lower())
+            if hasattr(item, "title") and item.title:
+                item_names.append(str(item.title).lower())
 
         # match against canonical targets
         for target, aliases in target_aliases.items():
