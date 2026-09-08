@@ -93,11 +93,12 @@ Retrieves the SNV annotations for given analysis IDs. Generates JSON that maps a
 
 .. code-block:: bash
 
-    varvis_connector get-snv-annotations analysis-ids [analysis-ids ...]
+    varvis_connector get-snv-annotations [--stream] analysis-ids [analysis-ids ...]
 
 **Command Options:**
 
 - ``analysis-ids`` (required) (one or more values): One or more analysis IDs (integers).
+- ``--stream``: Stream variants row-by-row as newline-delimited JSON (JSONL) instead of loading all analyses eagerly into memory. Recommended for large WES or WGS analyses to avoid high memory usage and out-of-memory errors.
 
 For output formatting options see :ref:`output_options` below.
 

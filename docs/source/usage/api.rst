@@ -80,3 +80,40 @@ VarvisClient API
 ----------------
 
 The :doc:`API documentation </api/client>` gives an overview about all available methods.
+
+Streaming SNV Annotations
+-------------------------
+
+For large whole-exome sequencing (WES) or whole-genome sequencing (WGS) analyses, loading the complete SNV annotations eagerly into memory using :meth:`~varvis_connector.VarvisClient.get_snv_annotations` can consume hundreds of megabytes or gigabytes of RAM.
+
+To stream SNV annotations incrementally with minimal memory overhead (< 2 MB peak RSS):
+
+.. code-block:: python
+
+    # Stream variants row-by-row as raw lists (fastest, lowest memory overhead)
+    for variant in client.iter_snv_annotations(analysis_id=37813):
+        print(variant)
+
+    # Stream variants with column header mapping as dictionaries
+    for variant in client.iter_snv_annotations(analysis_id=37813, as_dict=True, allow_buffering=True):
+        print(variant["Gene"], variant["Chr"], variant["Pos"])
+
+    # Stream with filtering by target genes or genomic coordinates
+    for variant in client.iter_snv_annotations(
+        analysis_id=37813,
+        target_genes={"BRAF", "KRAS"},
+        target_coordinates={("chr7", 140753336)},
+    ):
+        print("Filtered variant:", variant)
+
+Header Inspection
+~~~~~~~~~~~~~~~~~
+
+You can inspect or retrieve the SNV annotation header schema without loading all variant records:
+
+.. code-block:: python
+
+    header = client.get_snv_annotation_header(analysis_id=37813)
+    for col in header:
+        print(col.id, col.title)
+

@@ -51,6 +51,8 @@ The implementation is compact and centered around a few files:
 
 - `src/varvis_connector/_varvis_client.py`
   The core API client and transport logic.
+- `src/varvis_connector/_snv_stream_parser.py`
+  Low-overhead streaming JSON parser for SNV annotation payloads supporting row-by-row iteration with constant memory overhead.
 - `src/varvis_connector/_cli.py`
   The full CLI implementation, including subcommand registration, argument parsing, data loading, command orchestration, and download UX.
 - `src/varvis_connector/models.py`
@@ -228,6 +230,8 @@ The client methods are straightforward endpoint-specific wrappers around `_send_
 
 - `get_internal_person_id()`
 - `get_snv_annotations()`
+- `iter_snv_annotations()`
+- `get_snv_annotation_header()`
 - `get_cnv_target_results()`
 - `get_pending_cnv_segments()`
 - `get_qc_case_metrics()`
@@ -302,6 +306,22 @@ If a `dict` is passed, it validates it before sending. The response is expected 
 #### `create_or_update_virtual_panel()`
 
 This follows a more conventional wrapped-response pattern than person create/update. The response is parsed through `_parse_response_for_primitive(resp, "response")`.
+
+#### `iter_snv_annotations()` and `get_snv_annotation_header()`
+
+Varvis SNV annotation payloads for whole-exome sequencing (WES) or whole-genome sequencing (WGS) can be large (often ~64,000+ variants across 160+ columns, corresponding to 180+ MB of uncompressed JSON). When loaded eagerly via `get_snv_annotations()`, the combined JSON parsing, dictionary construction, and Pydantic validation peak at ~1.67 GB RSS and retain ~936 MB heap memory, risking container out-of-memory (OOM) kills.
+
+To handle large payloads efficiently:
+
+- `iter_snv_annotations()` streams the HTTP response body in chunks (64 KB) using a low-overhead, single-pass streaming JSON decoder (`_snv_stream_parser.py`) without external parser dependencies.
+- **Payload layout:** Varvis API serializes the variant data table before the column header in the JSON object (`{"data": [[...]], "header": [...]}`).
+- **Streaming modes:**
+  - `as_dict=False` (default): Yields each variant as a raw `list[Any]` immediately over the wire in constant memory (< 2 MB peak RSS).
+  - `as_dict=True` with `header`: Resolves column names dynamically and yields variants as `dict[str, Any]` in constant memory (< 2 MB peak RSS).
+  - `as_dict=True` with `allow_buffering=True`: Buffers raw row tuples in memory while streaming, parses the trailing header at the end of the stream, and yields dictionary records lazily (peak memory < 35 MB on 182 MB WES payloads).
+- **Filtering:** Supports `target_genes` (case-insensitive gene symbols) and `target_coordinates` (chrom and 1-based pos tuples). Dynamic column indices are discovered from header IDs via `resolve_header_indices()` to tolerate panel variations.
+- **Header inspection:** `get_snv_annotation_header()` streams the payload until the header definition is encountered, parses the `SnvAnnotationHeaderItem` models, and terminates the connection early.
+- **CLI integration:** `varvis_connector get-snv-annotations --stream` streams variants as newline-delimited JSON (JSONL) records containing `analysis_id` alongside variant fields.
 
 #### `request()`
 

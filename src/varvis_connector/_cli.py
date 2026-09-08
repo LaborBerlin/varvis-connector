@@ -301,17 +301,57 @@ class _GetSnvAnnotations(_AutoLoginCmdBase):
 
     @classmethod
     def set_up_arguments(cls, argparser: argparse.ArgumentParser) -> None:
+        """Set up command-line arguments for get-snv-annotations."""
         argparser.add_argument(
             "analysis_ids",
             metavar="analysis-ids",
             nargs="+",
             help="One or more analysis IDs (integers).",
         )
+        argparser.add_argument(
+            "--stream",
+            action="store_true",
+            help="Stream variants row-by-row as newline-delimited JSON (JSONL) to prevent memory spikes.",
+        )
         cls._set_arguments_for_fileoutput(argparser)
 
     def run(self) -> None:
+        """Execute the get-snv-annotations command."""
         super().run()
 
+        if self.parsed_args.stream:
+            # write destination info if file output
+            if self.parsed_args.output.name != "<stdout>":
+                self.logger.info(f'Writing output to file "{self.parsed_args.output.name}"')
+
+            # stream variants line-by-line
+            any_success = False
+            for a_id in self.parsed_args.analysis_ids:
+                try:
+                    a_id = int(a_id)
+                except ValueError:
+                    self.logger.warning(f'Provided analysis ID "{a_id}" is not an integer.')
+                    continue
+
+                try:
+                    # stream variants for analysis
+                    for variant in self.client.iter_snv_annotations(a_id, as_dict=True, allow_buffering=True):
+                        record = {"analysis_id": a_id, **variant}
+                        self.parsed_args.output.write(json.dumps(record) + "\n")
+                    any_success = True
+                except Exception as exc:
+                    self.logger.warning(f"Could not retrieve SNV annotations for analysis ID {a_id}: {exc}")
+
+            # flush output buffer
+            self.parsed_args.output.flush()
+
+            # check if any request succeeded
+            if not any_success:
+                self.logger.error("Data retrieval failed for all requests. No data to write.")
+                exit(1)
+            return
+
+        # retrieve snv annotations eagerly
         output_data: dict[int, SnvAnnotationData] = {}
         for a_id in self.parsed_args.analysis_ids:
             try:
