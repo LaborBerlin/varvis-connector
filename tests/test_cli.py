@@ -20,6 +20,7 @@ import random
 import sys
 from fnmatch import fnmatchcase
 from io import StringIO
+from typing import Any
 from unittest import mock
 
 import pytest
@@ -408,6 +409,81 @@ def test_get_snv_annotations(
             expected_output[str(a_id)] = snv_annotation_data_dict
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output or None)
+
+
+@pytest.mark.parametrize(
+    "analysis_ids_and_expected_data, output_to_file",
+    [
+        ({1: True}, False),
+        ({1: True, 2: True, 3: False}, False),
+        ({2: False}, False),
+        ({"not_an_int": False}, False),
+        ({1: False, 2: True, 3: True}, True),
+    ],
+)
+def test_get_snv_annotations_stream(
+    capfd,
+    monkeypatch,
+    tmp_path,
+    varvis_mockapi_with_login,
+    analysis_ids_and_expected_data,
+    output_to_file,
+):
+    """Test get-snv-annotations CLI command with --stream flag."""
+    # set up cli args with stream flag
+    further_args = ["--stream"] + list(map(str, analysis_ids_and_expected_data.keys()))
+    _, output_file = _set_up_cmd_args_and_env_with_output(
+        tmp_path,
+        monkeypatch,
+        "get-snv-annotations",
+        output_to_file,
+        None,
+        further_args,
+    )
+
+    # prepare mock responses and expected stream records
+    expected_records: list[dict[str, Any]] = []
+    has_success = False
+    for a_id, expected_data in analysis_ids_and_expected_data.items():
+        if expected_data:
+            has_success = True
+            snv_annotation_data = SnvAnnotationDataFactory.build()
+            snv_annotation_data_dict = snv_annotation_data.model_dump(mode="json")
+            varvis_mockapi_with_login.get(
+                MOCK_URL + f"api/analysis/{a_id}/annotations",
+                json=snv_annotation_data_dict,
+            )
+            header_keys = [
+                h.get("id") or h.get("title") or f"col_{i}"
+                for i, h in enumerate(snv_annotation_data_dict.get("header", []))
+            ]
+            for row in snv_annotation_data_dict.get("data", []):
+                record = {"analysis_id": a_id}
+                record.update(dict(zip(header_keys, row, strict=False)))
+                expected_records.append(record)
+
+    # execute command and verify jsonl output
+    if not has_success:
+        with pytest.raises(SystemExit):
+            main()
+        captured = capfd.readouterr()
+        assert "Data retrieval failed for all requests. No data to write." in captured.err
+    else:
+        main()
+        captured = capfd.readouterr()
+        if output_file:
+            assert captured.out.startswith("Running varvis_connector ")
+            content = output_file.read_text().strip()
+        else:
+            assert captured.err.startswith("Running varvis_connector ")
+            content = captured.out.strip()
+
+        if content:
+            lines = content.splitlines()
+            records = [json.loads(line) for line in lines]
+            assert records == expected_records
+        else:
+            assert expected_records == []
 
 
 @pytest.mark.parametrize(
@@ -1492,7 +1568,7 @@ def test_download_files(
                 continue
 
             f_path = target_folder / f
-            f_exists = f_path.exists()
+            f_exists = f_path.is_file()
             if a_id == 0:
                 assert not f_exists
             else:

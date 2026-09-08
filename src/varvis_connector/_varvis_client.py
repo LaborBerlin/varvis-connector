@@ -24,6 +24,7 @@ from json import JSONDecodeError
 from pathlib import Path
 from fnmatch import fnmatchcase
 from typing import Type, TypeVar, Callable, Any, overload, Literal
+from collections.abc import Collection, Iterator, Sequence
 
 import requests
 from pydantic import BaseModel, ValidationError
@@ -32,8 +33,10 @@ from tqdm import tqdm
 
 from ._log import default_logger
 from .errors import VarvisError
+from ._snv_stream_parser import stream_snv_json_payload, resolve_header_indices
 from .models import (
     SnvAnnotationData,
+    SnvAnnotationHeaderItem,
     CnvTargetResults,
     PendingCnvData,
     QCCaseMetricsData,
@@ -424,6 +427,232 @@ class VarvisClient:
         )
 
         return _parse_response_for_model(SnvAnnotationData, resp)
+
+    def get_snv_annotation_header(self, analysis_id: int) -> list[SnvAnnotationHeaderItem]:
+        """
+        Retrieves the SNV annotation header for a given analysis without loading data rows into memory.
+
+        This method sends an HTTP GET request to the annotations endpoint and parses only the header
+        metadata, discarding the variant data rows on the fly to avoid excessive memory consumption.
+
+        :param analysis_id: The unique identifier of the analysis.
+        :return: A list of `SnvAnnotationHeaderItem` objects defining the annotation columns.
+        :raises VarvisError: If the Varvis API responds with an error or the header is missing.
+        """
+        self.logger.info("Getting SNV annotation header for analysis %d", analysis_id)
+        resp = self._send_request(
+            "GET",
+            f"analysis/{analysis_id}/annotations",
+            handle_http_errors={400: "Analysis not found for the given ID."},
+            stream=True,
+        )
+
+        metadata: dict[str, Any] = {}
+        try:
+            # consume and discard variant data rows while extracting metadata
+            for _ in stream_snv_json_payload(resp, metadata_out=metadata):
+                pass
+            raw_header = metadata.get("header")
+            if raw_header is None:
+                raise VarvisError(f"Header missing in annotations response for analysis {analysis_id}")
+            return [SnvAnnotationHeaderItem.model_validate(item) for item in raw_header]
+        finally:
+            resp.close()
+
+    @overload
+    def iter_snv_annotations(
+        self,
+        analysis_id: int,
+        *,
+        as_dict: Literal[False] = False,
+        header: Sequence[Any] | None = None,
+        target_genes: Collection[str] | None = None,
+        target_coordinates: Collection[tuple[str, int]] | None = None,
+        chunk_size: int = 65536,
+        allow_buffering: bool = False,
+        header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
+    ) -> Iterator[list[Any]]: ...
+
+    @overload
+    def iter_snv_annotations(
+        self,
+        analysis_id: int,
+        *,
+        as_dict: Literal[True],
+        header: Sequence[Any] | None = None,
+        target_genes: Collection[str] | None = None,
+        target_coordinates: Collection[tuple[str, int]] | None = None,
+        chunk_size: int = 65536,
+        allow_buffering: bool = False,
+        header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
+    ) -> Iterator[dict[str, Any]]: ...
+
+    def iter_snv_annotations(
+        self,
+        analysis_id: int,
+        *,
+        as_dict: bool = False,
+        header: Sequence[Any] | None = None,
+        target_genes: Collection[str] | None = None,
+        target_coordinates: Collection[tuple[str, int]] | None = None,
+        chunk_size: int = 65536,
+        allow_buffering: bool = False,
+        header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
+    ) -> Iterator[list[Any]] | Iterator[dict[str, Any]]:
+        """
+        Streams SNV annotations row-by-row for a given analysis to prevent memory exhaustion.
+
+        Streams the HTTP response directly and yields variant annotations as they arrive over the wire.
+        Because the Varvis API serializes variant data before column headers, yielding dictionaries
+        or filtering by coordinates/genes requires either an explicit header sequence or setting
+        `allow_buffering=True`.
+
+        :param analysis_id: The unique identifier of the analysis.
+        :param as_dict: If True, yields each row as a dictionary mapped to column header names or IDs.
+        :param header: Optional sequence of column header descriptors or names.
+        :param target_genes: Optional collection of gene symbols to filter variants by.
+        :param target_coordinates: Optional collection of (chromosome, position) tuples to filter variants by.
+        :param chunk_size: Read chunk size in bytes for the HTTP stream. Defaults to 64 KB.
+        :param allow_buffering: If True and as_dict=True without header, buffers raw rows until the trailing
+            header is parsed at the end of the stream, then yields dictionaries lazily.
+        :param header_callback: Optional callback invoked with the parsed header once reached in the stream.
+        :return: An iterator yielding individual variant rows as lists or dictionaries.
+        :raises ValueError: If as_dict=True without header and allow_buffering=False, or if filters require header.
+        :raises VarvisError: If the Varvis API responds with an error or the payload terminates prematurely.
+        """
+        if as_dict and header is None and not allow_buffering:
+            raise ValueError(
+                "as_dict=True requires 'header' to stream with zero buffering because 'data' precedes 'header' "
+                "in the Varvis API response. Provide 'header', use get_snv_annotation_header() first, or pass "
+                "allow_buffering=True."
+            )
+
+        if (target_genes or target_coordinates) and header is None and not allow_buffering:
+            raise ValueError(
+                "Filtering by target_genes or target_coordinates requires 'header' to filter during streaming "
+                "with zero buffering. Provide 'header', use get_snv_annotation_header() first, or pass "
+                "allow_buffering=True."
+            )
+
+        self.logger.info("Streaming SNV annotations for analysis %d (as_dict=%s)", analysis_id, as_dict)
+        resp = self._send_request(
+            "GET",
+            f"analysis/{analysis_id}/annotations",
+            handle_http_errors={400: "Analysis not found for the given ID."},
+            stream=True,
+        )
+
+        try:
+            yield from self._stream_snv_annotations_generator(
+                resp=resp,
+                as_dict=as_dict,
+                header=header,
+                target_genes=target_genes,
+                target_coordinates=target_coordinates,
+                chunk_size=chunk_size,
+                allow_buffering=allow_buffering,
+                header_callback=header_callback,
+            )
+        finally:
+            resp.close()
+
+    def _stream_snv_annotations_generator(
+        self,
+        resp: requests.Response,
+        as_dict: bool,
+        header: Sequence[Any] | None,
+        target_genes: Collection[str] | None,
+        target_coordinates: Collection[tuple[str, int]] | None,
+        chunk_size: int,
+        allow_buffering: bool,
+        header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None,
+    ) -> Iterator[Any]:
+        # resolve filters and column keys if header is provided up front
+        genes_filter = {g.upper() for g in target_genes} if target_genes else None
+        coords_filter = (
+            {(str(c[0]).lower().removeprefix("chr"), int(c[1])) for c in target_coordinates}
+            if target_coordinates
+            else None
+        )
+
+        col_keys: list[str] | None = None
+        gene_idx: int | None = None
+        chr_idx: int | None = None
+        pos_idx: int | None = None
+
+        if header is not None:
+            col_keys = []
+            for i, item in enumerate(header):
+                if isinstance(item, SnvAnnotationHeaderItem):
+                    col_keys.append(item.id or item.title or f"col_{i}")
+                elif isinstance(item, dict):
+                    col_id = item.get("id") or item.get("title")
+                    col_keys.append(str(col_id) if col_id is not None else f"col_{i}")
+                else:
+                    col_keys.append(str(item))
+            indices = resolve_header_indices(header)
+            gene_idx = indices.get("gene")
+            chr_idx = indices.get("chr")
+            pos_idx = indices.get("pos")
+
+        # helper function to match variant against filters
+        def matches_filters(row: list[Any], g_idx: int | None, c_idx: int | None, p_idx: int | None) -> bool:
+            if genes_filter is not None:
+                if g_idx is None or g_idx >= len(row):
+                    return False
+                row_gene = str(row[g_idx]).upper()
+                if row_gene not in genes_filter:
+                    return False
+            if coords_filter is not None:
+                if c_idx is None or p_idx is None or c_idx >= len(row) or p_idx >= len(row):
+                    return False
+                row_chr = str(row[c_idx]).lower().removeprefix("chr")
+                try:
+                    row_pos = int(row[p_idx])
+                except (ValueError, TypeError):
+                    return False
+                if (row_chr, row_pos) not in coords_filter:
+                    return False
+            return True
+
+        metadata: dict[str, Any] = {}
+
+        # stream with zero buffering when header is known or buffering not requested
+        if header is not None or not allow_buffering:
+            for row in stream_snv_json_payload(resp, chunk_size=chunk_size, metadata_out=metadata):
+                if matches_filters(row, gene_idx, chr_idx, pos_idx):
+                    if as_dict and col_keys is not None:
+                        yield dict(zip(col_keys, row))
+                    else:
+                        yield row
+
+            # notify header callback if provided
+            if header_callback is not None and "header" in metadata:
+                validated_header = [SnvAnnotationHeaderItem.model_validate(item) for item in metadata["header"]]
+                header_callback(validated_header)
+        else:
+            # buffer rows when header needs to be discovered at stream end
+            buffered_rows: list[list[Any]] = []
+            for row in stream_snv_json_payload(resp, chunk_size=chunk_size, metadata_out=metadata):
+                buffered_rows.append(row)
+
+            raw_header = metadata.get("header") or []
+            validated_header = [SnvAnnotationHeaderItem.model_validate(item) for item in raw_header]
+            if header_callback is not None:
+                header_callback(validated_header)
+
+            col_keys = [item.id for item in validated_header]
+            indices = resolve_header_indices(validated_header)
+            gene_idx = indices.get("gene")
+            chr_idx = indices.get("chr")
+            pos_idx = indices.get("pos")
+
+            for row in buffered_rows:
+                if matches_filters(row, gene_idx, chr_idx, pos_idx):
+                    if as_dict:
+                        yield dict(zip(col_keys, row))
+                    else:
+                        yield row
 
     def get_cnv_target_results(
         self,
