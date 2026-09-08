@@ -11,7 +11,7 @@ Its core purpose is not just to wrap HTTP endpoints, but to hide a number of inc
 
 The project is fairly mature in terms of developer ergonomics: it has strong documentation, broad automated tests, typed Pydantic models, linting/type-checking/security checks, and CI across Python 3.10 to 3.14. The main architectural weakness is concentration of logic in large modules, especially the CLI module. There are also a few places where runtime `assert` statements are used as correctness guards, which is less robust than explicit error handling.
 
-The package version is managed in `pyproject.toml`; the repository is on the `0.2.0.dev9` development line.
+The package version is managed in `pyproject.toml`; the repository is on the `0.3.0` release line.
 
 ## What The Project Does
 
