@@ -133,7 +133,7 @@ jobs:
           else
             echo "Creating badges branch on origin"
             git checkout -b badges
-            git push origin badges
+            git push origin badges || echo "Could not push badges branch (e.g. fork PR without write permissions)"
           fi
 
           # Add a worktree for badges branch
@@ -161,7 +161,7 @@ jobs:
 
           if ! git diff --cached --quiet; then
             git commit -m "chore: update coverage badge for PR #${PR_NUMBER}"
-            git push origin HEAD:badges
+            git push origin HEAD:badges || echo "Could not push coverage badge (e.g. fork PR without write permissions)"
           else
             echo "No badge changes to commit."
           fi
