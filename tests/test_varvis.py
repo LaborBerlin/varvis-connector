@@ -82,8 +82,8 @@ def varvis_init_data():
         )
 
     assert isinstance(init_data[0], str)
-    if not init_data[0].endswith("/"):  # pragma: no cover
-        pytest.fail(f"{env_vars[0]} must end with a slash")
+    if not init_data[0].endswith("/"):
+        init_data[0] += "/"
 
     https_proxy = os.getenv("HTTPS_PROXY", None)
     init_data.append(https_proxy)
