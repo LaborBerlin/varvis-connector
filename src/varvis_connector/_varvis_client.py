@@ -449,9 +449,10 @@ class VarvisClient:
 
         metadata: dict[str, Any] = {}
         try:
-            # consume and discard variant data rows while extracting metadata
+            # consume variant data rows until header metadata is parsed
             for _ in stream_snv_json_payload(resp, metadata_out=metadata):
-                pass
+                if "header" in metadata:
+                    break
             raw_header = metadata.get("header")
             if raw_header is None:
                 raise VarvisError(f"Header missing in annotations response for analysis {analysis_id}")
@@ -486,6 +487,20 @@ class VarvisClient:
         allow_buffering: bool = False,
         header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
     ) -> Iterator[dict[str, Any]]: ...
+
+    @overload
+    def iter_snv_annotations(
+        self,
+        analysis_id: int,
+        *,
+        as_dict: bool = False,
+        header: Sequence[Any] | None = None,
+        target_genes: Collection[str] | None = None,
+        target_coordinates: Collection[tuple[str, int]] | None = None,
+        chunk_size: int = 65536,
+        allow_buffering: bool = False,
+        header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
+    ) -> Iterator[list[Any]] | Iterator[dict[str, Any]]: ...
 
     def iter_snv_annotations(
         self,
@@ -567,10 +582,27 @@ class VarvisClient:
         allow_buffering: bool,
         header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None,
     ) -> Iterator[Any]:
+        """
+        Internal generator yielding filtered SNV annotations incrementally from the response stream.
+
+        Handles upfront or buffered header resolution, applies case-insensitive gene symbol
+        and genomic coordinate filtering, and formats rows as raw lists or dictionaries.
+
+        :param resp: Active streaming HTTP response.
+        :param as_dict: Whether to emit dictionary records mapped to column names.
+        :param header: Optional upfront header descriptors.
+        :param target_genes: Optional set of gene symbols to retain.
+        :param target_coordinates: Optional set of (chrom, pos) tuples to retain.
+        :param chunk_size: HTTP read chunk size in bytes.
+        :param allow_buffering: Whether to buffer rows when header is trailing.
+        :param header_callback: Optional callback invoked when header is parsed.
+        :return: Generator yielding lists or dictionaries.
+        :raises ValueError: If target filters cannot resolve necessary column indices from header.
+        """
         # resolve filters and column keys if header is provided up front
-        genes_filter = {g.upper() for g in target_genes} if target_genes else None
+        genes_filter = {g.strip().upper() for g in target_genes} if target_genes else None
         coords_filter = (
-            {(str(c[0]).lower().removeprefix("chr"), int(c[1])) for c in target_coordinates}
+            {(str(c[0]).strip().lower().removeprefix("chr"), int(c[1])) for c in target_coordinates}
             if target_coordinates
             else None
         )
@@ -595,18 +627,26 @@ class VarvisClient:
             chr_idx = indices.get("chr")
             pos_idx = indices.get("pos")
 
+            # validate that required filter columns exist in provided header
+            if genes_filter is not None and gene_idx is None:
+                raise ValueError("Could not resolve 'gene' column index from header for target_genes filter.")
+            if coords_filter is not None and (chr_idx is None or pos_idx is None):
+                raise ValueError(
+                    "Could not resolve chromosome ('chr') or position ('pos') column index from header for target_coordinates filter."
+                )
+
         # helper function to match variant against filters
         def matches_filters(row: list[Any], g_idx: int | None, c_idx: int | None, p_idx: int | None) -> bool:
             if genes_filter is not None:
                 if g_idx is None or g_idx >= len(row):
                     return False
-                row_gene = str(row[g_idx]).upper()
+                row_gene = str(row[g_idx]).strip().upper()
                 if row_gene not in genes_filter:
                     return False
             if coords_filter is not None:
                 if c_idx is None or p_idx is None or c_idx >= len(row) or p_idx >= len(row):
                     return False
-                row_chr = str(row[c_idx]).lower().removeprefix("chr")
+                row_chr = str(row[c_idx]).strip().lower().removeprefix("chr")
                 try:
                     row_pos = int(row[p_idx])
                 except (ValueError, TypeError):
@@ -641,11 +681,21 @@ class VarvisClient:
             if header_callback is not None:
                 header_callback(validated_header)
 
-            col_keys = [item.id for item in validated_header]
+            col_keys = [item.id or item.title or f"col_{i}" for i, item in enumerate(validated_header)]
             indices = resolve_header_indices(validated_header)
             gene_idx = indices.get("gene")
             chr_idx = indices.get("chr")
             pos_idx = indices.get("pos")
+
+            # validate that required filter columns exist in discovered header
+            if genes_filter is not None and gene_idx is None:
+                raise ValueError(
+                    "Could not resolve 'gene' column index from discovered header for target_genes filter."
+                )
+            if coords_filter is not None and (chr_idx is None or pos_idx is None):
+                raise ValueError(
+                    "Could not resolve chromosome ('chr') or position ('pos') column index from discovered header for target_coordinates filter."
+                )
 
             for row in buffered_rows:
                 if matches_filters(row, gene_idx, chr_idx, pos_idx):

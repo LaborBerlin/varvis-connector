@@ -306,3 +306,64 @@ def test_client_iter_snv_annotations_http_error(varvis_mockapi_with_login):
 
     with pytest.raises(VarvisError, match="Analysis not found for the given ID."):
         list(client.iter_snv_annotations(999))
+
+
+def test_resolve_header_indices_spaced_aliases():
+    """Test resolve_header_indices handles title strings with spaces and case variants."""
+    header = [
+        {"title": "Variant ID"},
+        {"title": "Gene Symbol"},
+        {"title": "Chromosome"},
+        {"title": "Genomic Position"},
+        {"title": "Reference Allele"},
+        {"title": "Alternative Allele"},
+    ]
+    indices = resolve_header_indices(header)
+    assert indices["id"] == 0
+    assert indices["gene"] == 1
+    assert indices["chr"] == 2
+    assert indices["pos"] == 3
+    assert indices["ref"] == 4
+    assert indices["alt"] == 5
+
+
+def test_client_iter_snv_annotations_unresolved_filter_error(varvis_mockapi_with_login):
+    """Test ValueError raised when target_genes or target_coordinates cannot resolve column index."""
+    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    bad_payload = {
+        "header": [{"id": "foo", "title": "Foo"}, {"id": "bar", "title": "Bar"}],
+        "data": [["val1", "val2"]],
+    }
+    varvis_mockapi_with_login.get(url, json=bad_payload)
+
+    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client.login()
+
+    # upfront header missing gene
+    with pytest.raises(ValueError, match="Could not resolve 'gene' column index"):
+        list(client.iter_snv_annotations(123, header=bad_payload["header"], target_genes={"BRCA1"}))
+
+    # upfront header missing chr / pos
+    with pytest.raises(ValueError, match="Could not resolve chromosome"):
+        list(client.iter_snv_annotations(123, header=bad_payload["header"], target_coordinates={("1", 100)}))
+
+    # buffered header missing gene
+    with pytest.raises(ValueError, match="Could not resolve 'gene' column index"):
+        list(client.iter_snv_annotations(123, allow_buffering=True, target_genes={"BRCA1"}))
+
+
+def test_client_get_snv_annotation_header_early_break(varvis_mockapi_with_login):
+    """Test get_snv_annotation_header parses header and exits early without draining full data."""
+    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    payload_header_first = {
+        "header": [{"id": "ID", "title": "Identifier"}, {"id": "Gene", "title": "Gene Symbol"}],
+        "data": [["1", "BRCA1"], ["2", "TP53"]],
+    }
+    varvis_mockapi_with_login.get(url, json=payload_header_first)
+
+    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client.login()
+
+    header = client.get_snv_annotation_header(123)
+    assert len(header) == 2
+    assert header[1].id == "Gene"

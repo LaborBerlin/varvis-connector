@@ -44,10 +44,10 @@ def resolve_header_indices(header: Sequence[Any]) -> dict[str, int]:
     indices: dict[str, int] = {}
 
     target_aliases: dict[str, set[str]] = {
-        "id": {"id", "variantid", "variant_id"},
+        "id": {"id", "variantid", "variant_id", "internal_id"},
         "gene": {"gene", "gene_symbol", "symbol", "genesymbol"},
         "chr": {"chr", "chromosome", "chrom"},
-        "pos": {"pos", "position", "start"},
+        "pos": {"pos", "position", "start", "genomic_position"},
         "ref": {"ref", "reference", "reference_allele"},
         "alt": {"alt", "alternative", "alternate", "alternative_allele"},
     }
@@ -55,19 +55,27 @@ def resolve_header_indices(header: Sequence[Any]) -> dict[str, int]:
     # inspect each column in order
     for idx, item in enumerate(header):
         # extract candidate names from item
-        item_names: list[str] = []
+        raw_candidates: list[str] = []
         if isinstance(item, str):
-            item_names.append(item.lower())
+            raw_candidates.append(item)
         elif isinstance(item, dict):
             if "id" in item and item["id"]:
-                item_names.append(str(item["id"]).lower())
+                raw_candidates.append(str(item["id"]))
             if "title" in item and item["title"]:
-                item_names.append(str(item["title"]).lower())
+                raw_candidates.append(str(item["title"]))
         else:
             if hasattr(item, "id") and item.id:
-                item_names.append(str(item.id).lower())
+                raw_candidates.append(str(item.id))
             if hasattr(item, "title") and item.title:
-                item_names.append(str(item.title).lower())
+                raw_candidates.append(str(item.title))
+
+        # normalize candidates to handle spaces and formatting variations
+        item_names: set[str] = set()
+        for cand in raw_candidates:
+            clean = cand.strip().lower()
+            item_names.add(clean)
+            item_names.add(clean.replace(" ", "_"))
+            item_names.add(clean.replace(" ", ""))
 
         # match against canonical targets
         for target, aliases in target_aliases.items():

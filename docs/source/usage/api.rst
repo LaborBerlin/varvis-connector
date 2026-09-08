@@ -86,21 +86,27 @@ Streaming SNV Annotations
 
 For large whole-exome sequencing (WES) or whole-genome sequencing (WGS) analyses, loading the complete SNV annotations eagerly into memory using :meth:`~varvis_connector.VarvisClient.get_snv_annotations` can consume hundreds of megabytes or gigabytes of RAM.
 
-To stream SNV annotations incrementally with minimal memory overhead (< 2 MB peak RSS):
+To stream SNV annotations incrementally with constant, low memory overhead (< 2 MB peak RSS for raw streaming):
 
 .. code-block:: python
 
-    # Stream variants row-by-row as raw lists (fastest, lowest memory overhead)
+    # Stream variants row-by-row as raw lists (constant < 2 MB peak RSS)
     for variant in client.iter_snv_annotations(analysis_id=37813):
         print(variant)
 
-    # Stream variants with column header mapping as dictionaries
+    # Stream variants as dictionaries with zero buffering by providing the header up front
+    header = client.get_snv_annotation_header(analysis_id=37813)
+    for variant in client.iter_snv_annotations(analysis_id=37813, as_dict=True, header=header):
+        print(variant["Gene"], variant["Chr"], variant["Pos"])
+
+    # Stream variants with column header discovered at stream end (compact row buffering)
     for variant in client.iter_snv_annotations(analysis_id=37813, as_dict=True, allow_buffering=True):
         print(variant["Gene"], variant["Chr"], variant["Pos"])
 
     # Stream with filtering by target genes or genomic coordinates
     for variant in client.iter_snv_annotations(
         analysis_id=37813,
+        header=header,
         target_genes={"BRAF", "KRAS"},
         target_coordinates={("chr7", 140753336)},
     ):
