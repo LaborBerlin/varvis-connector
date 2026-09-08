@@ -70,6 +70,7 @@ exclude-newer-package = { urllib3 = false }
 line-length = 120
 
 [tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
 # rules to ingore:
 # - F811: Redefinition of unused variable; we have to do this with pytest fixtures
 ignore = ["F811"]

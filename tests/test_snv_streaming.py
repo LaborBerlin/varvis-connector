@@ -26,9 +26,8 @@ from varvis_connector._snv_stream_parser import (
     resolve_header_indices,
 )
 from ._common import (
-    MOCK_URL as MOCK_URL,
     varvis_mockapi_with_login as varvis_mockapi_with_login,
-)
+)  # "as ..." prevents removal of fixture as "unused" by ruff linter
 
 
 def _create_mock_streaming_response(raw_bytes: bytes, chunk_size: int = 16) -> Response:
