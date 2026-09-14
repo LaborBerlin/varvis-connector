@@ -17,7 +17,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 from datetime import datetime, date
 from typing import Any, Literal, Annotated
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, AliasChoices
 
 
 SampleOriginType = Literal["GERMLINE", "SOMATIC", "UNKNOWN", "SNPID", "MASKED"]
@@ -592,7 +592,11 @@ class CaseReportAnalysis(BaseModel):
 
     analysisId: int
     sampleId: str | None = None
-    analysisType: AnalysisType | None = None  # according to API docs
+    analysisType: AnalysisType | None = Field(
+        default=None,
+        validation_alias=AliasChoices("type", "analysisType"),
+        description="Analysis type (e.g. SNV, CNV). Accepts wire key 'type' or legacy 'analysisType'.",
+    )
     enrichmentKit: str | None = None
     sourceId: str | None = None
     annotationSources: list[CaseReportAnnotationSource]
