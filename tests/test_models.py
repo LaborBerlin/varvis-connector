@@ -11,7 +11,7 @@ This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
-:author: Markus Konrad <markus.konrad@laborberlin.com>
+:author: Bernt Popp <bernt.popp@laborberlin.com>
 """
 
 from typing import Any
