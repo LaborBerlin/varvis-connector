@@ -1,5 +1,40 @@
 # Changelog
 
+## 0.3.0 - 2026-09-18
+
+### Bug Fixes
+
+- Normalize test playground URL and update lockfile for security audit
+- Validate filter columns, add dynamic bool overload, and normalize aliases
+- Accept wire type field in CaseReportAnalysis alias
+
+### CI
+
+- Disable weekly dependency audit -- we rely on GitHub dependabot alerts for this
+- Tolerate badge push failures on fork PRs without write permissions
+
+### Development
+
+- Add your-highness to codeowners list
+- Update dependencies
+
+### Features
+
+- Add streaming support for SNV annotations to prevent OOM
+
+### Other
+
+- Bump astral-sh/setup-uv from 8.1.0 to 10.0.1
+- Bump actions/checkout from 6 to 7
+
+### Styling
+
+- Configure ruff lint select and clean up parser imports
+
+### Testing
+
+- Skip playground tests when credentials are not configured
+
 ## 0.2.2.post1 - 2026-05-29
 
 ### Documentation
