@@ -1596,6 +1596,26 @@ def test_download_files(
                     dl_index += 1
 
 
+def test_download_files_rejects_folder_template_outside_output_dir(
+    capfd, monkeypatch, tmp_path, varvis_mockapi_with_login
+):
+    output_dir = tmp_path / "downloads"
+    output_dir.mkdir()
+    _set_up_cmd_args_and_env_with_output(
+        tmp_path,
+        monkeypatch,
+        "download-files",
+        False,
+        None,
+        ["1", "--output-dir", str(output_dir), "--create-folder-per-id", "../escaped-%ID"],
+    )
+
+    main()
+
+    assert not (tmp_path / "escaped-1").exists()
+    assert "escapes the output directory" in capfd.readouterr().err
+
+
 @pytest.mark.parametrize(
     "method, endpoint, raw_input, input_data, input_from_file, output_to_file, output_indent, simulate_error",
     [

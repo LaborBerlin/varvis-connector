@@ -521,7 +521,7 @@ Before any file is written, `download_files()` filters out link entries where:
 - target file exists and overwrite is not allowed
 - the same download URL is already collected
 
-The filename checks are especially important: they prevent path traversal and malformed-name writes.
+Download filenames are validated as single path components on both POSIX and Windows conventions. The client rejects separators, drive syntax, NUL bytes, and Windows DOS device names, including the superscript-digit COM and LPT aliases, then resolves the target and verifies that it remains under the requested output directory. The CLI applies the same resolved-path confinement check to per-analysis folder templates before creating directories, including templates that traverse through existing symlinks.
 
 ### Parallel download execution
 
