@@ -893,7 +893,6 @@ def test_get_file_download_links(varvis, analysis_id, expect_error):
 def test_download_files(
     tmp_path,
     varvis_mockapi_with_login,
-    varvis,
     analysis_id,
     file_patterns,
     allow_overwrite,
@@ -903,6 +902,9 @@ def test_download_files(
     only_collect_urls,
     expect_error,
 ):
+    varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+    assert varvis.login()
+
     mocked_files = create_varvis_mockapi_downloads(
         varvis_mockapi_with_login,
         analysis_id,
@@ -928,7 +930,7 @@ def test_download_files(
     )
 
     if expect_error is None:
-        res = varvis.download_files(**kwargs)
+        res = varvis.download_files(**kwargs)  # type: ignore[reportArgumentType]
         assert isinstance(res, dict)
         for file_name_or_url, target_path in res.items():
             assert isinstance(file_name_or_url, str)
@@ -957,7 +959,7 @@ def test_download_files(
             assert (tmp_path / mocked_files[0]).read_text() == "already existed"
     else:
         with pytest.raises(VarvisError, match=expect_error):
-            varvis.download_files(**kwargs)
+            varvis.download_files(**kwargs)  # type: ignore[reportArgumentType]
 
 
 def test_download_files_param_errors(varvis, tmp_path):
