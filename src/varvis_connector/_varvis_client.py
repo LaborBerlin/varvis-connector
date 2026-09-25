@@ -262,9 +262,6 @@ class VarvisClient:
             self.logger.info('Using HTTPS proxy "%s"', self.https_proxy)
 
         if not self.ssl_verify:
-            import urllib3.exceptions
-
-            urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
             self.logger.warning("SSL verification disabled")
 
         if self.backoff_factor_seconds < 0:

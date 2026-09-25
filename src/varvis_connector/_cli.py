@@ -1310,6 +1310,11 @@ class VarvisCLI:
                 "prefer VARVIS_PASSWORD or the interactive prompt."
             )
 
+        if not client_config.get("ssl_verify", True):
+            import urllib3.exceptions
+
+            urllib3.disable_warnings(category=urllib3.exceptions.InsecureRequestWarning)
+
         # initialize the Varvis client
         self._client = VarvisClient(**client_config, logger=self.logger)
 

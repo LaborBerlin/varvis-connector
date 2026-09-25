@@ -206,6 +206,33 @@ def test_password_argument_emits_security_warning(capfd, monkeypatch_clean_env):
     assert "Using --password may expose the password in process listings and shell history" in captured.out
 
 
+def test_cli_disables_ssl_warnings_when_verification_is_disabled(monkeypatch_clean_env, monkeypatch):
+    import urllib3.exceptions
+
+    disable_warnings = mock.Mock()
+    monkeypatch.setattr("urllib3.disable_warnings", disable_warnings)
+    monkeypatch_clean_env.setenv("TEST_DONT_RUN_CMD", "1")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "varvis_connector",
+            "--api-url",
+            "https://foo.com/",
+            "--username",
+            "testuser",
+            "--password",
+            "testpass",
+            "--disable-ssl-verify",
+            "check-login",
+        ],
+    )
+
+    main()
+
+    disable_warnings.assert_called_once_with(category=urllib3.exceptions.InsecureRequestWarning)
+
+
 @pytest.mark.parametrize(
     "drop_arg, set_envvar, expected_value",
     [
