@@ -99,7 +99,7 @@ Main configuration fields:
 Notable implementation details:
 
 - `__post_init__` normalizes trailing slash on `api_url`
-- it can disable `urllib3` SSL warnings when verification is disabled
+- the CLI suppresses `urllib3` insecure-request warnings when verification is disabled, while direct `VarvisClient` use leaves process-wide warning filters unchanged
 - it validates retry/backoff settings up front
 - `__repr__` and `__str__` deliberately mask the password as `***`
 

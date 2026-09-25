@@ -203,6 +203,15 @@ def test_login_mocked(varvis_mockapi_with_login):
     assert v.login()
 
 
+def test_disabling_ssl_verification_does_not_disable_warnings(monkeypatch):
+    def unexpected_disable_warnings(*args, **kwargs):
+        pytest.fail("Client construction must not change process-wide warning filters")
+
+    monkeypatch.setattr("urllib3.disable_warnings", unexpected_disable_warnings)
+
+    VarvisClient("https://example.com/", "user", "password", ssl_verify=False)
+
+
 def test_login_fail(varvis_init_data):
     url, username, password, https_proxy, ssl_verify = varvis_init_data
     v = VarvisClient(
