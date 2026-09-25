@@ -27,6 +27,7 @@ from varvis_connector._snv_stream_parser import (
 )
 from ._common import (
     varvis_mockapi_with_login as varvis_mockapi_with_login,
+    MOCK_URL,
 )  # "as ..." prevents removal of fixture as "unused" by ruff linter
 
 
@@ -179,10 +180,10 @@ SAMPLE_STREAMING_PAYLOAD = {
 
 def test_client_iter_snv_annotations_raw_rows(varvis_mockapi_with_login):
     """Test client.iter_snv_annotations yielding raw lists by default."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     varvis_mockapi_with_login.get(url, json=SAMPLE_STREAMING_PAYLOAD)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     rows = list(client.iter_snv_annotations(123))
@@ -193,10 +194,10 @@ def test_client_iter_snv_annotations_raw_rows(varvis_mockapi_with_login):
 
 def test_client_iter_snv_annotations_as_dict_with_header(varvis_mockapi_with_login):
     """Test client.iter_snv_annotations yielding dictionaries when header is provided."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     varvis_mockapi_with_login.get(url, json=SAMPLE_STREAMING_PAYLOAD)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     header = ["ID", "Chr", "Pos", "Ref", "Alt", "Gene", "AF"]
@@ -212,7 +213,7 @@ def test_client_iter_snv_annotations_as_dict_with_header(varvis_mockapi_with_log
 
 def test_client_iter_snv_annotations_missing_header_error(varvis_mockapi_with_login):
     """Test ValueError is raised when as_dict=True without header or allow_buffering."""
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     with pytest.raises(ValueError, match="as_dict=True requires 'header'"):
@@ -221,10 +222,10 @@ def test_client_iter_snv_annotations_missing_header_error(varvis_mockapi_with_lo
 
 def test_client_iter_snv_annotations_allow_buffering(varvis_mockapi_with_login):
     """Test client.iter_snv_annotations with allow_buffering=True when header is at EOF."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     varvis_mockapi_with_login.get(url, json=SAMPLE_STREAMING_PAYLOAD)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     rows = list(client.iter_snv_annotations(123, as_dict=True, allow_buffering=True))
@@ -236,10 +237,10 @@ def test_client_iter_snv_annotations_allow_buffering(varvis_mockapi_with_login):
 
 def test_client_iter_snv_annotations_filter_gene(varvis_mockapi_with_login):
     """Test filtering variants by gene symbol."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     varvis_mockapi_with_login.get(url, json=SAMPLE_STREAMING_PAYLOAD)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     header = SAMPLE_STREAMING_PAYLOAD["header"]
@@ -250,10 +251,10 @@ def test_client_iter_snv_annotations_filter_gene(varvis_mockapi_with_login):
 
 def test_client_iter_snv_annotations_filter_coordinates(varvis_mockapi_with_login):
     """Test filtering variants by genomic coordinates."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     varvis_mockapi_with_login.get(url, json=SAMPLE_STREAMING_PAYLOAD)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     header = SAMPLE_STREAMING_PAYLOAD["header"]
@@ -265,10 +266,10 @@ def test_client_iter_snv_annotations_filter_coordinates(varvis_mockapi_with_logi
 
 def test_client_iter_snv_annotations_header_callback(varvis_mockapi_with_login):
     """Test header_callback is invoked with parsed header descriptors."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     varvis_mockapi_with_login.get(url, json=SAMPLE_STREAMING_PAYLOAD)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     received_header: list = []
@@ -284,10 +285,10 @@ def test_client_iter_snv_annotations_header_callback(varvis_mockapi_with_login):
 
 def test_client_get_snv_annotation_header(varvis_mockapi_with_login):
     """Test client.get_snv_annotation_header parsing only header metadata."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     varvis_mockapi_with_login.get(url, json=SAMPLE_STREAMING_PAYLOAD)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     header = client.get_snv_annotation_header(123)
@@ -298,10 +299,10 @@ def test_client_get_snv_annotation_header(varvis_mockapi_with_login):
 
 def test_client_iter_snv_annotations_http_error(varvis_mockapi_with_login):
     """Test client.iter_snv_annotations raising VarvisError on HTTP error."""
-    url = "https://playground.varvis.com/api/analysis/999/annotations"
+    url = f"{MOCK_URL}api/analysis/999/annotations"
     varvis_mockapi_with_login.get(url, status_code=400)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     with pytest.raises(VarvisError, match="Analysis not found for the given ID."):
@@ -329,14 +330,14 @@ def test_resolve_header_indices_spaced_aliases():
 
 def test_client_iter_snv_annotations_unresolved_filter_error(varvis_mockapi_with_login):
     """Test ValueError raised when target_genes or target_coordinates cannot resolve column index."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     bad_payload = {
         "header": [{"id": "foo", "title": "Foo"}, {"id": "bar", "title": "Bar"}],
         "data": [["val1", "val2"]],
     }
     varvis_mockapi_with_login.get(url, json=bad_payload)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     # upfront header missing gene
@@ -354,14 +355,14 @@ def test_client_iter_snv_annotations_unresolved_filter_error(varvis_mockapi_with
 
 def test_client_get_snv_annotation_header_early_break(varvis_mockapi_with_login):
     """Test get_snv_annotation_header parses header and exits early without draining full data."""
-    url = "https://playground.varvis.com/api/analysis/123/annotations"
+    url = f"{MOCK_URL}api/analysis/123/annotations"
     payload_header_first = {
         "header": [{"id": "ID", "title": "Identifier"}, {"id": "Gene", "title": "Gene Symbol"}],
         "data": [["1", "BRCA1"], ["2", "TP53"]],
     }
     varvis_mockapi_with_login.get(url, json=payload_header_first)
 
-    client = VarvisClient("https://playground.varvis.com/", "mockuser", "mockpw")
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
     client.login()
 
     header = client.get_snv_annotation_header(123)

@@ -16,7 +16,8 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 import pytest
 
-MOCK_URL = "https://playground.varvis.com/"
+# the MOCK_URL must have a trailing slash
+MOCK_URL = "https://mock-instance.varvis.mock/"
 
 
 @pytest.fixture
@@ -52,7 +53,7 @@ def create_varvis_mockapi_downloads(
 
     mocked_files.extend([".", " "])  # simulate invalid file names
 
-    dl_links_url = f"https://playground.varvis.com/api/analysis/{analysis_id}/get-file-download-links"
+    dl_links_url = f"{MOCK_URL}api/analysis/{analysis_id}/get-file-download-links"
     if expect_error is None or expect_error is False:
         mockapi.get(
             dl_links_url,
