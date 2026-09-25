@@ -21,7 +21,7 @@ These options apply to all commands:
 
 * ``--api-url URL``: The base URL for the Varvis API. If not provided, the value from the ``VARVIS_URL`` environment variable will be used.
 * ``--username USERNAME``: The username for Varvis authentication. If not provided, the value from the ``VARVIS_USER`` environment variable will be used.
-* ``--password PASSWORD``: The password for Varvis authentication. If not provided, the value from the ``VARVIS_PASSWORD`` environment variable will be used. If neither the option nor the environment variable is set, the program will prompt for the password.
+* ``--password PASSWORD``: The password for Varvis authentication. If not provided, the value from the ``VARVIS_PASSWORD`` environment variable will be used. If neither the option nor the environment variable is set, the program will prompt for the password. **Warning:** Passing a password as a command-line option may expose it in process listings and shell history. The CLI displays a warning when this option is used; prefer ``VARVIS_PASSWORD`` or the interactive prompt.
 * ``--https-proxy PROXY``: HTTPS proxy to use for all communication with the API. If not provided, the value from the ``HTTPS_PROXY`` environment variable will be used.
 * ``--ssl-verify {0,1}``: Whether to verify SSL certificates. If not provided, the value from the ``VARVIS_SSL_VERIFY`` environment variable will be used. Default is 1 (verify).
 * ``--connection-timeout SECONDS``: HTTP connection timeout in seconds. If not provided, the value from the ``VARVIS_CONNECTION_TIMEOUT`` environment variable will be used. Default is 10 seconds.
@@ -638,7 +638,7 @@ Here are some examples of how to use the CLI:
     # Get the case report for a case ID and save it to a file
     varvis_connector get-case-report --output /tmp/case-report.json CASE123
 
-    # Use with explicit API URL and credentials
+    # Explicit password arguments may be visible in process listings and shell history
     varvis_connector --api-url https://varvis.example.com/ \
         --username user --password pass \
         get-internal-person-id 200000000

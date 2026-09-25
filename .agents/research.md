@@ -275,6 +275,8 @@ The client can be fully initialized from environment variables:
 
 Type conversion is handled manually, including string-to-bool conversion for `ssl_verify`.
 
+The CLI also accepts a `--password` argument for constrained workflows. Its help text warns that command-line passwords may be visible in process listings and shell history, and CLI startup emits the same warning when the argument is explicitly used. The environment variable `VARVIS_PASSWORD` and interactive prompt avoid placing the password directly in the process argument list.
+
 #### `get_pending_cnv_segments()`
 
 This method accepts either:
