@@ -26,6 +26,7 @@ from polyfactory.factories.pydantic_factory import ModelFactory
 from requests import Response
 
 from ._common import (
+    MOCK_URL,
     varvis_mockapi_with_login as varvis_mockapi_with_login,
     create_varvis_mockapi_downloads,
 )  # "as ..." prevents removal of fixture as "unused" by ruff linter
@@ -194,12 +195,11 @@ def test_login(varvis_init_data):
 
 
 def test_login_mocked(varvis_mockapi_with_login):
-    url = "https://playground.varvis.com/"
     username = "mockuser"
     password = "mockpw"
 
     assert varvis_mockapi_with_login
-    v = VarvisClient(url, username, password)
+    v = VarvisClient(MOCK_URL, username, password)
     assert v.login()
 
 
@@ -341,6 +341,18 @@ def test_get_internal_person_id(varvis, person_lims_id):
     else:
         res = varvis.get_internal_person_id(person_lims_id)
         assert isinstance(res, int)
+
+
+def test_get_internal_person_id_quotes_lims_id(varvis_mockapi_with_login):
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+    client.login()
+    person_lims_id = "person/a?b#c"
+    encoded_lims_id = "person%2Fa%3Fb%23c"
+    mock_url = f"{MOCK_URL}api/person/{encoded_lims_id}/id"
+    varvis_mockapi_with_login.get(mock_url, json={"success": True, "response": 123})
+
+    assert client.get_internal_person_id(person_lims_id) == 123
+    assert varvis_mockapi_with_login.last_request.url == mock_url
 
 
 @pytest.mark.parametrize(
@@ -694,6 +706,20 @@ def test_find_analyses_by_filename(varvis, filename, expect_empty, expect_error)
         else:
             assert len(res) > 0
             assert all(isinstance(item, FindByInputFileNameAnalysisItem) for item in res)
+
+
+def test_find_analyses_by_filename_quotes_query_components(varvis_mockapi_with_login):
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+    client.login()
+    filename = "sample#1?x&y.vcf"
+    mock_url = (
+        f"{MOCK_URL}analysis-list/find-by-customer-provided-input-file-name?"
+        "customerProvidedInputFileName=sample%231%3Fx%26y.vcf"
+    )
+    varvis_mockapi_with_login.get(mock_url, json={"success": True, "response": []})
+
+    assert client.find_analyses_by_filename(filename) == []
+    assert varvis_mockapi_with_login.last_request.url == mock_url
 
 
 @pytest.mark.parametrize(

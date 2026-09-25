@@ -23,7 +23,7 @@ from dataclasses import dataclass, field
 from json import JSONDecodeError
 from pathlib import Path
 from fnmatch import fnmatchcase
-from urllib.parse import urlsplit
+from urllib.parse import quote, urlsplit
 from typing import Type, TypeVar, Callable, Any, overload, Literal
 from collections.abc import Collection, Iterator, Sequence
 
@@ -64,6 +64,11 @@ DEFAULT_HTTP_ERROR_MESSAGES = {
 }
 
 TModel = TypeVar("TModel", bound=BaseModel)
+
+
+def _url_param(param: str) -> str:
+    """Apply URL quoting to a URL parameter string."""
+    return quote(param, safe="")
 
 
 def _validate_download_filename(file_name: str) -> str:
@@ -770,7 +775,7 @@ class VarvisClient:
 
         resp = self._send_request(
             "GET",
-            f"results/{person_lims_id}/cnv?{query_params}",
+            f"results/{_url_param(person_lims_id)}/cnv?{query_params}",
             handle_http_errors={
                 404: "Person with given LIMS-ID was not found.",
                 422: "Analysis ID is not associated with a CNV analysis or is not valid for the specified person LIMS-ID.",
@@ -796,7 +801,7 @@ class VarvisClient:
 
         resp = self._send_request(
             "GET",
-            f"person/{person_lims_id}/id",
+            f"person/{_url_param(person_lims_id)}/id",
             handle_http_errors={404: "Person not found for the given LIMS-ID."},
         )
 
@@ -884,7 +889,7 @@ class VarvisClient:
 
         resp = self._send_request(
             "GET",
-            f"qualitycontrol/metrics/case/{person_lims_id}",
+            f"qualitycontrol/metrics/case/{_url_param(person_lims_id)}",
             handle_http_errors={400: "Person with given LIMS-ID was not found."},
         )
         data = _jsondata_from_response(resp, "response")
@@ -936,7 +941,7 @@ class VarvisClient:
 
         resp = self._send_request(
             "GET",
-            f"{person_lims_id}/coverage{query_params}",
+            f"{_url_param(person_lims_id)}/coverage{query_params}",
             handle_http_errors={400: "Person with given LIMS-ID was not found."},
         )
         return _parse_response_for_model_list(CoverageData, resp)
@@ -984,7 +989,7 @@ class VarvisClient:
 
         resp = self._send_request(
             "GET",
-            f"person/{person_lims_id}",
+            f"person/{_url_param(person_lims_id)}",
             handle_http_errors={404: "Person with given LIMS-ID was not found."},
         )
         return _parse_response_for_model(PersonData, resp, data_from_key="response")
@@ -1061,7 +1066,7 @@ class VarvisClient:
 
         resp = self._send_request(
             "GET",
-            f"cases/{person_lims_id}/report{query_params}",
+            f"cases/{_url_param(person_lims_id)}/report{query_params}",
             handle_http_errors={
                 404: "Person with given LIMS-ID was not found or no report exists for the given criteria."
             },
@@ -1102,7 +1107,7 @@ class VarvisClient:
         self.logger.info('Getting analyses for person LIMS ID "%s"', person_lims_id)
         resp = self._send_request(
             "GET",
-            f"person/{person_lims_id}/analyses",
+            f"person/{_url_param(person_lims_id)}/analyses",
             handle_http_errors={400: "Person with given LIMS-ID was not found."},
         )
         return _parse_response_for_model_list(AnalysisItem, resp)
@@ -1129,7 +1134,7 @@ class VarvisClient:
             "Getting analyses by searching for filename component(s) %s",
             " AND ".join(f'"{f}"' for f in filename),
         )
-        query_param = "&".join(f"customerProvidedInputFileName={f}" for f in filename)
+        query_param = "&".join(f"customerProvidedInputFileName={_url_param(f)}" for f in filename)
         resp = self._send_request(
             "GET",
             "analysis-list/find-by-customer-provided-input-file-name?" + query_param,
