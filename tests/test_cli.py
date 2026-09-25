@@ -178,6 +178,32 @@ def test_help(capfd, monkeypatch):
 
     captured = capfd.readouterr()
     assert captured.out.strip().startswith("usage: varvis_connector [-h] ")
+    assert "Passing this option may expose the password in process listings and shell history" in " ".join(
+        captured.out.split()
+    )
+
+
+def test_password_argument_emits_security_warning(capfd, monkeypatch_clean_env):
+    monkeypatch_clean_env.setenv("TEST_DONT_RUN_CMD", "1")
+    monkeypatch_clean_env.setattr(
+        sys,
+        "argv",
+        [
+            "varvis_connector",
+            "--api-url",
+            "https://foo.com/",
+            "--username",
+            "testuser",
+            "--password",
+            "testpass",
+            "check-login",
+        ],
+    )
+
+    main()
+
+    captured = capfd.readouterr()
+    assert "Using --password may expose the password in process listings and shell history" in captured.out
 
 
 @pytest.mark.parametrize(

@@ -1304,6 +1304,12 @@ class VarvisCLI:
 
         self.logger.info("Running varvis_connector v%s", __version__)
 
+        if self._parsed_args.password is not None:
+            self.logger.warning(
+                "Using --password may expose the password in process listings and shell history; "
+                "prefer VARVIS_PASSWORD or the interactive prompt."
+            )
+
         # initialize the Varvis client
         self._client = VarvisClient(**client_config, logger=self.logger)
 

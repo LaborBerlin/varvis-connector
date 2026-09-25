@@ -208,7 +208,11 @@ class VarvisClient:
 
     api_url: str = field(metadata={"help": "Varvis API URL", "envvar": "VARVIS_URL"})
     username: str = field(metadata={"help": "Varvis credentials username", "envvar": "VARVIS_USER"})
-    password: str = field(metadata={"help": "Varvis credentials password"})
+    password: str = field(
+        metadata={
+            "help": "Varvis credentials password. WARNING: Passing this option may expose the password in process listings and shell history; prefer VARVIS_PASSWORD or the interactive prompt"
+        }
+    )
     https_proxy: str | None = field(
         default=None,
         metadata={"help": "Optional HTTPS proxy URL", "envvar": "HTTPS_PROXY"},
