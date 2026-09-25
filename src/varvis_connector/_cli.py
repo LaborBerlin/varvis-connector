@@ -1172,7 +1172,16 @@ class _DownloadFiles(_AutoLoginCmdBase):
                     analysis_foldername = str(analysis_id)
 
                 analysis_target_folder = output_dir / analysis_foldername
-                analysis_target_folder.mkdir(exist_ok=True)
+                try:
+                    analysis_target_folder.resolve().relative_to(output_dir.resolve())
+                except (ValueError, OSError):
+                    self.logger.error(
+                        "Analysis folder for ID %s escapes the output directory: %s",
+                        analysis_id,
+                        analysis_foldername,
+                    )
+                    continue
+                analysis_target_folder.mkdir(parents=True, exist_ok=True)
             else:
                 analysis_target_folder = output_dir
 

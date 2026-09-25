@@ -65,6 +65,27 @@ DEFAULT_HTTP_ERROR_MESSAGES = {
 TModel = TypeVar("TModel", bound=BaseModel)
 
 
+def _validate_download_filename(file_name: str) -> str:
+    """Validate a download filename for safe use as a single path component."""
+
+    # Windows is strange: certain file names were treated as devices in MS-DOS and now are still reserved names
+    device_names = {"con", "prn", "aux", "nul"}
+    device_names.update(f"com{number}" for number in range(1, 10))
+    device_names.update(f"lpt{number}" for number in range(1, 10))
+    device_names.update(f"{device}{digit}" for device in ("com", "lpt") for digit in "¹²³")
+    normalized_name = file_name.strip().rstrip(".")
+    device_name = normalized_name.split(".", maxsplit=1)[0].lower()
+    if (
+        not normalized_name
+        or file_name != normalized_name
+        or normalized_name in {".", ".."}
+        or any(char in file_name for char in ("\0", "/", "\\", ":"))
+        or device_name in device_names
+    ):
+        raise ValueError(f"Invalid download filename: {file_name}")
+    return file_name
+
+
 def _jsondata_from_response(resp: Response, data_from_key: str) -> list | dict | str | float | int | bool | None:
     """Convert API response to JSON and extract data from the specified key. Handle reported errors."""
     jsondata = resp.json()
@@ -1277,7 +1298,11 @@ class VarvisClient:
 
             output_file_name = link_object.fileName.strip()
 
-            if output_file_name in {"", ".", ".."} or "\0" in output_file_name or "/" in output_file_name:
+            try:
+                _validate_download_filename(output_file_name)
+                output_file_path = output_path / output_file_name
+                output_file_path.resolve().relative_to(output_path.resolve())  # will raise ValueError for on walk up
+            except (ValueError, OSError):
                 self.logger.error(
                     '> Skipping file "%s" because it has an invalid name',
                     output_file_name,
@@ -1300,8 +1325,6 @@ class VarvisClient:
                     link_object.estimatedRestoreTime,
                 )
                 continue
-
-            output_file_path = output_path / output_file_name
 
             if output_file_path.exists():
                 if allow_overwrite:

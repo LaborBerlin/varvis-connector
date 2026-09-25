@@ -31,6 +31,7 @@ from ._common import (
 )  # "as ..." prevents removal of fixture as "unused" by ruff linter
 
 from varvis_connector import VarvisClient
+from varvis_connector._varvis_client import _validate_download_filename
 from varvis_connector.errors import VarvisError
 from varvis_connector.models import (
     SnvAnnotationData,
@@ -929,6 +930,38 @@ def test_download_files_param_errors(varvis, tmp_path):
         varvis.download_files(1, "/foo/bar")
     with pytest.raises(ValueError, match="Parameter `max_parallel_downloads` must be at least 1"):
         varvis.download_files(1, tmp_path, max_parallel_downloads=0)
+
+
+@pytest.mark.parametrize(
+    "file_name",
+    [
+        "",
+        " ",
+        "foo.bar.",
+        " foo.  ",
+        "..\\outside.bat",
+        "C:outside.bat",
+        "\\\\server\\share",
+        "CON",
+        "nul.txt",
+        "COM9.log",
+        "COM¹.txt",
+        "COM²",
+        "COM³.log",
+        "LPT1",
+        "LPT¹.txt",
+        "LPT²",
+        "LPT³.log",
+    ],
+)
+def test_validate_download_filename_rejects_unsafe_names(file_name):
+    with pytest.raises(ValueError, match="Invalid download filename"):
+        _validate_download_filename(file_name)
+
+
+@pytest.mark.parametrize("file_name", ["sample.bam", "report.final.vcf", "sample_1.txt"])
+def test_validate_download_filename_accepts_regular_names(file_name):
+    assert _validate_download_filename(file_name) == file_name
 
 
 @pytest.mark.parametrize(
