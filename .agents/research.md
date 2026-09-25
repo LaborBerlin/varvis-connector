@@ -200,6 +200,8 @@ When an envelope says the request failed, `_raise_varvis_error()` extracts and f
 
 This is important because many upstream failures are apparently only understandable through those payload fields.
 
+User-provided LIMS IDs interpolated into endpoint paths and filename components interpolated into search query strings are percent-encoded before requests are sent, so reserved URL characters remain part of the parameter value.
+
 ### Concurrency-triggered forced logout
 
 This is one of the more unusual upstream behaviors and likely one of the main reasons the package exists.
