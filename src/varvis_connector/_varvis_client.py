@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from json import JSONDecodeError
 from pathlib import Path
 from fnmatch import fnmatchcase
+from urllib.parse import urlsplit
 from typing import Type, TypeVar, Callable, Any, overload, Literal
 from collections.abc import Collection, Iterator, Sequence
 
@@ -1390,12 +1391,13 @@ class VarvisClient:
         return_messages: bool,
     ) -> dict[str, Path] | tuple[dict[str, Path], list[tuple[int, str]]]:
         """
-        Downloads multiple files from given URLs to specified target locations concurrently.
+        Downloads multiple files from HTTPS URLs to specified target locations concurrently.
 
         This function utilizes a thread pool executor to download multiple files in parallel. Each file
         is downloaded to a specified target location provided in the dictionary. The function keeps
         track of progress and logs success or failure for each file download. Optionally, a progress
-        bar can be shown for each download to visualize the current progress.
+        bar can be shown for each download to visualize the current progress. URLs without an HTTPS
+        scheme and network location are rejected.
 
         :param urls_and_targets: A dictionary where keys are URLs pointing to files to download and
             values are their respective output file paths where the downloaded files should be stored.
@@ -1427,6 +1429,15 @@ class VarvisClient:
                         return f"{size:.2f} {unit}"
                     size /= 1024.0
                 return f"{size:.2f} PB"
+
+            parsed_url = urlsplit(url)
+            if parsed_url.scheme.lower() != "https" or not parsed_url.netloc:
+                logger.error(
+                    "Download #%d: Refusing to download a URL that is not HTTPS: %s",
+                    download_num + 1,
+                    url,
+                )
+                return False
 
             resp = requests.get(url, stream=True, verify=ssl_verify, timeout=connection_timeout)
 

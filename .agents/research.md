@@ -530,6 +530,7 @@ Download filenames are validated as single path components on both POSIX and Win
 For each download:
 
 - it performs a plain `requests.get(..., stream=True, timeout=...)`
+- it accepts only URLs with an HTTPS scheme and network location
 - checks status code
 - reads `content-length`
 - optionally renders a `tqdm` progress bar

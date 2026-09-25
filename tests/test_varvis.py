@@ -964,6 +964,24 @@ def test_validate_download_filename_accepts_regular_names(file_name):
     assert _validate_download_filename(file_name) == file_name
 
 
+@pytest.mark.parametrize("url", ["http://example.com/file", "ftp://example.com/file", "https:file"])
+def test_download_files_from_urls_parallel_rejects_non_https(monkeypatch, varvis, tmp_path, url):
+    def unexpected_request(*args, **kwargs):
+        pytest.fail("Non-HTTPS URL should be rejected before making a request")
+
+    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", unexpected_request)
+
+    result = varvis.download_files_from_urls_parallel(
+        {url: tmp_path / "file"},
+        max_parallel_downloads=1,
+        show_progress_bar=False,
+        return_messages=False,
+    )
+
+    assert result == {}
+    assert not (tmp_path / "file").exists()
+
+
 @pytest.mark.parametrize(
     "endpoint, handle_errors, expect_error",
     [
