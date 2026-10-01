@@ -52,7 +52,8 @@ jobs:
 
             # create an issue
             test -f .github/CODEOWNERS || (echo "a CODEOWNERS file must be given"; exit 1)
-            usernames=$(sed -n 's/^\*\s*@\([A-Za-z0-9_]\+\)/\1/p' .github/CODEOWNERS | paste -sd ',' -)
+            usernames=$(awk '!/^[[:space:]]*(#|$)/ {for (i=2; i<=NF; i++) {sub(/^@/, "", $i); printf "%s%s", (i>2?",":""), $i} print ""; exit}' .github/CODEOWNERS)
+            test -f .github/issue-template-dep-updates.md || (echo ".github/issue-template-dep-updates.md template file must be given"; exit 1)
             content=$(<.github/issue-template-dep-updates.md)
             content="${content//\{DATE\}/$today}"
             content="${content//\{BRANCH\}/$branch}"
