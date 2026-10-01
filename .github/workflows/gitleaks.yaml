@@ -7,6 +7,8 @@ name: Credential leaks check
 # can also be called by release workflow
 on:
   push:
+    branches:
+      - "**"
     tags-ignore:
       - "v*.*.*"
   workflow_call:
