@@ -101,7 +101,8 @@ def _jsondata_from_response(resp: Response, data_from_key: str) -> list | dict |
         _raise_varvis_error(jsondata, "Varvis API request did not succeed.")
     try:
         extracted = jsondata[data_from_key]
-        assert isinstance(extracted, list | dict | str | float | int | bool | None)
+        if not isinstance(extracted, list | dict | str | float | int | bool | None):
+            raise VarvisError(f'Response data "{data_from_key}" has unexpected type: {type(extracted)}')
         return extracted
     except KeyError as e:
         raise VarvisError(f"Response does not contain expected data key '{data_from_key}'") from e
@@ -115,7 +116,8 @@ def _parse_response_for_model(model_class: Type[TModel], resp: Response, data_fr
         result = _jsondata_from_response(resp, data_from_key)
         if result is None:
             raise VarvisError("Response data is None")
-        assert isinstance(result, dict)
+        if not isinstance(result, dict):
+            raise VarvisError("Response data should be a dictionary")
         cls_validation_method = getattr(model_class, "model_validate")
         data = result
     else:
@@ -125,7 +127,6 @@ def _parse_response_for_model(model_class: Type[TModel], resp: Response, data_fr
 
     try:
         validated_model = cls_validation_method(data)
-        assert isinstance(validated_model, model_class)
         return validated_model
     except ValidationError as e:
         raise VarvisError(f"Response validation failed: {e}") from e
@@ -142,7 +143,8 @@ def _parse_response_for_model_list(
         data = resp.json()
     cls_validation_method = getattr(model_class, "model_validate")
     return_data = []
-    assert isinstance(data, list)
+    if not isinstance(data, list):
+        raise VarvisError("Response data should be a list")
     for i, item in enumerate(data):
         try:
             return_data.append(cls_validation_method(item))
@@ -163,7 +165,8 @@ def _parse_response_for_primitive(
         except ValueError as e:
             raise VarvisError(f"Response conversion failed: {e}") from e
 
-    assert isinstance(data, None | bool | int | float | str)
+    if not isinstance(data, None | bool | int | float | str):
+        raise VarvisError(f"Parsed response data item has unexpected type: {type(data)}")
     return data
 
 
@@ -808,7 +811,9 @@ class VarvisClient:
         )
 
         pers_id = _parse_response_for_primitive(resp, "response", convert_result=int)
-        assert isinstance(pers_id, int)
+        if not isinstance(pers_id, int):
+            raise VarvisError("Parsed response item should be an integer")
+
         return pers_id
 
     def get_pending_cnv_segments(
@@ -895,7 +900,8 @@ class VarvisClient:
             handle_http_errors={400: "Person with given LIMS-ID was not found."},
         )
         data = _jsondata_from_response(resp, "response")
-        assert isinstance(data, dict)
+        if not isinstance(data, dict):
+            raise VarvisError("Parsed response data should be a dictionary")
 
         try:
             metric_results = data["metricResults"].pop(person_lims_id)
@@ -1241,7 +1247,8 @@ class VarvisClient:
 
         resp = self._send_modeldata("virtual-panel", virtual_panel_data)
         vp_id = _parse_response_for_primitive(resp, "response")
-        assert isinstance(vp_id, int)
+        if not isinstance(vp_id, int):
+            raise VarvisError("Parsed response item should be an integer")
         return vp_id
 
     def download_files(
