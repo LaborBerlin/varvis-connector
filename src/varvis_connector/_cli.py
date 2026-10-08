@@ -1238,7 +1238,8 @@ class _DownloadFiles(_AutoLoginCmdBase):
             return_messages=show_progress,
         )
         if show_progress:
-            assert isinstance(downloads_result, tuple) and len(downloads_result) == 2
+            if not isinstance(downloads_result, tuple) or len(downloads_result) != 2:
+                raise TypeError("Unexpected return value for download results")
             _, messages = downloads_result
             for lvl, msg in messages:
                 self.logger.log(lvl, msg)
@@ -1299,12 +1300,13 @@ class VarvisCLI:
         except RuntimeError as exc:
             failed_setup_msg = str(exc)
 
-        assert self._argparser is not None
-        assert self._parsed_args is not None
+        if self._parsed_args is None:
+            raise RuntimeError("_parsed_args must be initialized")
 
         # set up logging
         self._setup_logging()
-        assert self.logger is not None
+        if self.logger is None:
+            raise RuntimeError("logger must be initialized")
 
         if failed_setup_msg:
             self.logger.critical(failed_setup_msg)
@@ -1440,7 +1442,8 @@ class VarvisCLI:
         return client_config
 
     def _setup_logging(self) -> None:
-        assert self._parsed_args is not None
+        if self._parsed_args is None:
+            raise RuntimeError("_parsed_args must be initialized")
         log_level_label = self._parsed_args.loglevel.upper()
         log_level_value = LOG_LEVEL_MAPPING.get(log_level_label, -1)
 

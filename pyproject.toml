@@ -129,6 +129,4 @@ commit_preprocessors = [
 ]
 
 [tool.bandit]
-# B101 - use assert
-skips = ["B101"]
 exclude_dirs = ["tests"]
