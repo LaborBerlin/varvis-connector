@@ -24,12 +24,14 @@ from typing import Any
 from unittest import mock
 
 import pytest
+import requests
 from polyfactory.factories.pydantic_factory import ModelFactory
 
 import varvis_connector
 from varvis_connector import VarvisClient
 from varvis_connector._cli import VarvisCLI
 from varvis_connector.__main__ import main
+from varvis_connector.errors import VarvisError
 from varvis_connector.models import (
     SnvAnnotationData,
     CnvTargetResults,
@@ -415,8 +417,66 @@ def test_get_internal_person_id(
                 json={"response": expected_personal_id, "success": True},
             )
             expected_output[lims_id] = expected_personal_id
+        else:
+            varvis_mockapi_with_login.get(MOCK_URL + f"api/person/{lims_id}/id", status_code=404)
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output or None)
+
+
+@pytest.mark.parametrize("expected_exception", [VarvisError, requests.Timeout])
+def test_expected_retrieval_errors_are_skipped(
+    capfd, monkeypatch, tmp_path, varvis_mockapi_with_login, expected_exception
+):
+    """Expected API and network errors skip only the affected request."""
+    # set up two retrievals and fail the first with an expected exception
+    _, output_file = _set_up_cmd_args_and_env_with_output(
+        tmp_path,
+        monkeypatch,
+        "get-internal-person-id",
+        False,
+        None,
+        ["failed", "successful"],
+    )
+
+    def get_internal_person_id(_self, lims_id):
+        """Return one ID and raise the selected expected exception for the other."""
+        if lims_id == "failed":
+            raise expected_exception("expected failure")
+        return 12345
+
+    monkeypatch.setattr(VarvisClient, "get_internal_person_id", get_internal_person_id)
+
+    # verify partial output remains available
+    _run_cmd_and_check_output(capfd, output_file, None, {"successful": 12345})
+
+
+def test_unexpected_retrieval_errors_reach_top_level_handler(capfd, monkeypatch, tmp_path, varvis_mockapi_with_login):
+    """Programming errors terminate the command with their traceback."""
+    # set up a retrieval that raises an unexpected programming error
+    _set_up_cmd_args_and_env_with_output(
+        tmp_path,
+        monkeypatch,
+        "get-internal-person-id",
+        False,
+        None,
+        ["failed"],
+    )
+
+    def get_internal_person_id(_self, _lims_id):
+        """Simulate an unexpected defect in the retrieval implementation."""
+        raise TypeError("unexpected programming error")
+
+    monkeypatch.setattr(VarvisClient, "get_internal_person_id", get_internal_person_id)
+
+    # verify the top-level handler reports the unexpected exception
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    captured = capfd.readouterr()
+    assert exc_info.value.code == 1
+    assert "An error occurred while running the command" in captured.err
+    assert "TypeError: unexpected programming error" in captured.err
+    assert "Could not retrieve internal person ID" not in captured.err
 
 
 @pytest.mark.parametrize(
@@ -460,6 +520,8 @@ def test_get_snv_annotations(
             )
             # keys have to be strings in JSON
             expected_output[str(a_id)] = snv_annotation_data_dict
+        else:
+            varvis_mockapi_with_login.get(MOCK_URL + f"api/analysis/{a_id}/annotations", status_code=400)
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output or None)
 
@@ -514,6 +576,8 @@ def test_get_snv_annotations_stream(
                 record = {"analysis_id": a_id}
                 record.update(dict(zip(header_keys, row, strict=False)))
                 expected_records.append(record)
+        elif isinstance(a_id, int):
+            varvis_mockapi_with_login.get(MOCK_URL + f"api/analysis/{a_id}/annotations", status_code=400)
 
     # execute command and verify jsonl output
     if not has_success:
@@ -703,6 +767,11 @@ def test_get_qc_case_metrics(
             )
     else:
         expected_output = None
+        for lims_id in lims_ids:
+            varvis_mockapi_with_login.get(
+                MOCK_URL + f"api/qualitycontrol/metrics/case/{lims_id}",
+                status_code=400,
+            )
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output)
 
@@ -753,6 +822,8 @@ def test_get_coverage_data(
             )
     else:
         expected_output = None
+        for lims_id in lims_ids:
+            varvis_mockapi_with_login.get(MOCK_URL + f"api/{lims_id}/coverage", status_code=400)
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output)
 
@@ -874,14 +945,11 @@ def test_get_person_analyses(
         lims_ids,
     )
 
-    if expect_error:
-        expected_output = None
-    else:
-        expected_output = {}
-        for lims_id in lims_ids:
-            if lims_id == "NON_EXISTENT":
-                continue
-
+    expected_output = {}
+    for lims_id in lims_ids:
+        if lims_id == "NON_EXISTENT":
+            varvis_mockapi_with_login.get(MOCK_URL + f"person/{lims_id}/analyses", status_code=400)
+        else:
             mock_data = []
             for _ in range(random.randint(0, 4)):
                 model_instance = AnalysisItemFactory.build(personLimsId=lims_id).model_dump(mode="json")
@@ -892,6 +960,9 @@ def test_get_person_analyses(
                 MOCK_URL + f"person/{lims_id}/analyses",
                 json=mock_data,
             )
+
+    if expect_error:
+        expected_output = None
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output)
 
@@ -933,13 +1004,11 @@ def test_get_case_report(
         further_args,
     )
 
-    if expect_error:
-        expected_output = None
-    else:
-        expected_output = {}
-        for lims_id in lims_ids:
-            if lims_id == "NON_EXISTENT":
-                continue
+    expected_output = {}
+    for lims_id in lims_ids:
+        if lims_id == "NON_EXISTENT":
+            varvis_mockapi_with_login.get(MOCK_URL + f"api/cases/{lims_id}/report", status_code=404)
+        else:
             mock_data = CaseReportFactory.build(draft=lims_id.endswith("DRAFT")).model_dump(mode="json")
             expected_output[lims_id] = mock_data
 
@@ -947,6 +1016,9 @@ def test_get_case_report(
                 MOCK_URL + f"api/cases/{lims_id}/report",
                 json={"response": mock_data, "success": True},
             )
+
+    if expect_error:
+        expected_output = None
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output)
 
@@ -978,13 +1050,11 @@ def test_get_person(
         lims_ids,
     )
 
-    if expect_error:
-        expected_output = None
-    else:
-        expected_output = {}
-        for lims_id in lims_ids:
-            if lims_id == "NON_EXISTENT":
-                continue
+    expected_output = {}
+    for lims_id in lims_ids:
+        if lims_id == "NON_EXISTENT":
+            varvis_mockapi_with_login.get(MOCK_URL + f"api/person/{lims_id}", status_code=404)
+        else:
             mock_data = PersonDataFactory.build().model_dump(mode="json")
             mock_data["personalInformation"]["limsId"] = lims_id
             mock_data["clinicalInformation"]["limsId"] = lims_id
@@ -994,6 +1064,9 @@ def test_get_person(
                 MOCK_URL + f"api/person/{lims_id}",
                 json={"response": mock_data, "success": True},
             )
+
+    if expect_error:
+        expected_output = None
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output)
 
@@ -1500,19 +1573,22 @@ def test_get_file_download_links(
         list(map(str, analysis_ids)),
     )
 
-    if expect_success:
-        expected_output = {}
-        for id_ in analysis_ids:
-            if id_ <= 0:
-                continue
-
+    expected_output = {}
+    for id_ in analysis_ids:
+        if id_ <= 0:
+            varvis_mockapi_with_login.get(
+                MOCK_URL + f"api/analysis/{id_}/get-file-download-links",
+                status_code=400,
+            )
+        else:
             model_instance = AnalysisFileDownloadLinksFactory.build(id=id_).model_dump(mode="json")
             expected_output[str(id_)] = model_instance
             varvis_mockapi_with_login.get(
                 MOCK_URL + f"api/analysis/{id_}/get-file-download-links",
                 json={"response": model_instance, "success": True},
             )
-    else:
+
+    if not expect_success:
         expected_output = None
 
     _run_cmd_and_check_output(capfd, output_file, output_indent, expected_output)
