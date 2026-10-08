@@ -17,6 +17,8 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 import concurrent.futures
 import logging
 import os
+import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -1426,6 +1428,7 @@ class VarvisClient:
             connection_timeout: float,
             show_progress_bar: bool,
             download_chunk_size: int,
+            interrpt_event: threading.Event,
         ) -> bool:
             def human_readable_size(size_bytes: int) -> str:
                 units = ["B", "KB", "MB", "GB", "TB", "PB"]
@@ -1436,25 +1439,48 @@ class VarvisClient:
                     size /= 1024.0
                 return f"{size:.2f} PB"
 
+            dl_num1 = download_num + 1
             parsed_url = urlsplit(url)
             if parsed_url.scheme.lower() != "https" or not parsed_url.netloc:
                 logger.error(
                     "Download #%d: Refusing to download a URL that is not HTTPS: %s",
-                    download_num + 1,
+                    dl_num1,
                     url,
                 )
                 return False
 
-            resp = requests.get(url, stream=True, verify=ssl_verify, timeout=connection_timeout)
+            if interrpt_event.is_set():
+                logger.warning(f"Download #{dl_num1}: Download interrupted")
+                return False
+
+            try:
+                resp = requests.get(url, stream=True, verify=ssl_verify, timeout=connection_timeout)
+            except requests.RequestException:
+                logger.exception(f"Download #{dl_num1}: Error on download request")
+                return False
 
             if not resp.ok:
                 logger.error(
-                    f"Download #{download_num + 1}: HTTP error {resp.status_code} while downloading the file: {resp.reason}"
+                    f"Download #{dl_num1}: HTTP error {resp.status_code} while downloading the file: {resp.reason}"
                 )
+                resp.close()
                 return False
 
-            nbytes = int(resp.headers.get("content-length", 0))
-            nbytes_readable = human_readable_size(nbytes)
+            n_downloaded_bytes = 0
+            content_length = None
+            if resp.headers.get("Content-Encoding", "identity") == "identity":
+                try:
+                    content_length = int(resp.headers["Content-Length"])
+                except (KeyError, ValueError):
+                    logger.info(
+                        f"Download #{dl_num1}: No valid Content-Length in HTTP response header -- will omit "
+                        "final content length check of the downloaded file"
+                    )
+            else:
+                logger.info(
+                    f"Download #{dl_num1}: Content-Encoding signals compressed HTTP content -- will omit "
+                    "final content length check of the downloaded file"
+                )
 
             progress_bar_output_stream = None
             if show_progress_bar:
@@ -1463,79 +1489,139 @@ class VarvisClient:
                         progress_bar_output_stream = hndlr.stream
                         break
             else:
+                if content_length is not None:
+                    size_log_str = f"of size {human_readable_size(content_length)}"
+                else:
+                    size_log_str = "of unknown size"
                 logger.info(
-                    f'Download #{download_num + 1}: Downloading file of size {nbytes_readable} to output file "{output_file_path}"...'
+                    f'Download #{dl_num1}: Downloading file {size_log_str} to output file "{output_file_path}"...'
                 )
-                logger.debug(f"Download #{download_num + 1}: URL: {url}")
+                logger.debug(f"Download #{dl_num1}: URL: {url}")
 
             with tqdm(
-                desc=f"Download #{download_num + 1}",
+                desc=f"Download #{dl_num1}",
                 file=progress_bar_output_stream,
-                total=nbytes,
+                total=content_length,
                 unit="B",
                 unit_scale=True,
                 miniters=1,
                 disable=not show_progress_bar,
             ) as progress_bar:
+                tempfile_name = None
                 try:
-                    with open(output_file_path, "wb") as f:
+                    with tempfile.NamedTemporaryFile(
+                        mode="wb", delete=False, dir=output_file_path.parent, suffix=".part"
+                    ) as f:
+                        # store the temporary file name for later deletion if necessary
+                        tempfile_name = f.name
+                        # retain the file permissions
+                        file_mode = output_file_path.stat().st_mode if output_file_path.exists() else 0o664
+                        os.fchmod(f.fileno(), file_mode)
+
+                        # receive and write the file chunks
                         for chunk in resp.iter_content(chunk_size=download_chunk_size):
+                            if interrpt_event.is_set():
+                                raise KeyboardInterrupt()
                             if show_progress_bar:
                                 progress_bar.update(len(chunk))
                             f.write(chunk)
-                except (requests.HTTPError, requests.ConnectionError, OSError) as e:
-                    logging.error(f"Download #{download_num + 1}: Error while downloading the file: {e}")
+                            n_downloaded_bytes += len(chunk)
+
+                    if interrpt_event.is_set():
+                        raise KeyboardInterrupt()
+
+                    if content_length is not None and n_downloaded_bytes != content_length:
+                        logger.error(
+                            f"Download #{dl_num1}: Number of downloaded bytes ({n_downloaded_bytes}) does not "
+                            f"match number of expected bytes ({content_length})"
+                        )
+                        resp.close()
+                        return False
+
+                    os.replace(tempfile_name, output_file_path)
+                except (
+                    requests.RequestException,
+                    OSError,
+                    KeyboardInterrupt,
+                ) as exc:
+                    if isinstance(exc, KeyboardInterrupt):
+                        logger.warning(f"Download #{dl_num1}: Download interrupted")
+                    else:
+                        logger.exception(f"Download #{dl_num1}: Error while downloading the file")
+                    if tempfile_name:
+                        try:
+                            os.unlink(tempfile_name)
+                        except OSError:
+                            pass
+                    resp.close()
                     return False
+                finally:
+                    # clean up temporary file
+                    if tempfile_name:
+                        try:
+                            os.unlink(tempfile_name)
+                        except OSError:
+                            pass
+
+            resp.close()
 
             return True
 
+        interruption_event = threading.Event()
         with ThreadPoolExecutor(max_workers=max_parallel_downloads) as executor:
-            # submit tasks ("futures") to threads
-            futures = {}  # maps Future objects to URLs
-            for i, (url, target_path) in enumerate(urls_and_targets.items()):
-                fut = executor.submit(
-                    download_single_file,
-                    url,
-                    target_path,
-                    download_num=i,
-                    logger=self.logger,
-                    ssl_verify=self.ssl_verify,
-                    connection_timeout=self.connection_timeout,
-                    show_progress_bar=show_progress_bar,
-                    download_chunk_size=self.download_chunk_size,
-                )
-                futures[fut] = (url, i)
+            # enter try-block that catches program cancallation (ctrl-c) as KeyboardInterrupt exception
+            try:
+                # submit tasks ("futures") to threads
+                futures = {}  # maps Future objects to URLs
+                for i, (url, target_path) in enumerate(urls_and_targets.items()):
+                    fut = executor.submit(
+                        download_single_file,
+                        url,
+                        target_path,
+                        download_num=i,
+                        logger=self.logger,
+                        ssl_verify=self.ssl_verify,
+                        connection_timeout=self.connection_timeout,
+                        show_progress_bar=show_progress_bar,
+                        download_chunk_size=self.download_chunk_size,
+                        interrpt_event=interruption_event,
+                    )
+                    futures[fut] = (url, i)
 
-            # iterate through completed tasks (order is random)
-            collected_messages = []  # for deferring messages when using progress bars
-            downloaded_files = {}
-            for fut in concurrent.futures.as_completed(futures):
-                url, download_num = futures[fut]
-                downloaded_target_path = Path(urls_and_targets[url])
-                file_name = downloaded_target_path.name
-                try:
-                    success = fut.result()
-                except Exception as exc:
-                    msg = f'Download #{download_num + 1}: Error while downloading file "{file_name}": {exc}'
-                    if show_progress_bar:
-                        collected_messages.append((logging.ERROR, msg))
-                    else:
-                        self.logger.error(msg)
-                else:
-                    if success:
-                        downloaded_files[file_name] = downloaded_target_path
-
-                        msg = f'Download #{download_num + 1}: Successfully downloaded file "{file_name}"'
-                        if show_progress_bar:
-                            collected_messages.append((logging.INFO, msg))
-                        else:
-                            self.logger.info(msg)
-                    else:
-                        msg = f'Download #{download_num + 1}: Could not download file "{file_name}"'
+                # iterate through completed tasks (order is random)
+                collected_messages = []  # for deferring messages when using progress bars
+                downloaded_files = {}
+                for fut in concurrent.futures.as_completed(futures):
+                    url, download_num = futures[fut]
+                    downloaded_target_path = Path(urls_and_targets[url])
+                    file_name = downloaded_target_path.name
+                    try:
+                        success = fut.result()
+                    except Exception as exc:
+                        msg = f'Download #{download_num + 1}: Error while downloading file "{file_name}": {exc}'
                         if show_progress_bar:
                             collected_messages.append((logging.ERROR, msg))
                         else:
                             self.logger.error(msg)
+                    else:
+                        if success:
+                            downloaded_files[file_name] = downloaded_target_path
+
+                            msg = f'Download #{download_num + 1}: Successfully downloaded file "{file_name}"'
+                            if show_progress_bar:
+                                collected_messages.append((logging.INFO, msg))
+                            else:
+                                self.logger.info(msg)
+                        else:
+                            msg = f'Download #{download_num + 1}: Could not download file "{file_name}"'
+                            if show_progress_bar:
+                                collected_messages.append((logging.ERROR, msg))
+                            else:
+                                self.logger.error(msg)
+            except KeyboardInterrupt:
+                # download interrupted
+                interruption_event.set()
+                raise
 
             if show_progress_bar and not return_messages:
                 # log the collected messages after all downloads completed
