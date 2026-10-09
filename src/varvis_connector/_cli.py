@@ -18,7 +18,6 @@ import argparse
 import logging
 import os
 import sys
-import traceback
 from abc import ABC
 from dataclasses import dataclass, fields, MISSING
 import getpass
@@ -29,6 +28,7 @@ from typing import Any, ClassVar, Type, Callable
 import json
 
 from pydantic import BaseModel, ValidationError
+import requests
 
 from varvis_connector.models import (
     SnvAnnotationData,
@@ -283,7 +283,7 @@ class _GetInternalPersonIdCmd(_AutoLoginCmdBase):
         for lims_id in self.parsed_args.lims_ids:
             try:
                 output_data[lims_id] = self.client.get_internal_person_id(lims_id)
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve internal person ID for LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -339,7 +339,7 @@ class _GetSnvAnnotations(_AutoLoginCmdBase):
                         record = {"analysis_id": a_id, **variant}
                         self.parsed_args.output.write(json.dumps(record) + "\n")
                     any_success = True
-                except Exception as exc:
+                except (VarvisError, requests.RequestException) as exc:
                     self.logger.warning(f"Could not retrieve SNV annotations for analysis ID {a_id}: {exc}")
 
             # flush output buffer
@@ -356,10 +356,13 @@ class _GetSnvAnnotations(_AutoLoginCmdBase):
         for a_id in self.parsed_args.analysis_ids:
             try:
                 a_id = int(a_id)
-                output_data[a_id] = self.client.get_snv_annotations(a_id)
             except ValueError:
                 self.logger.warning(f'Provided analysis ID "{a_id}" is not an integer.')
-            except Exception as exc:
+                continue
+
+            try:
+                output_data[a_id] = self.client.get_snv_annotations(a_id)
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve SNV annotations for analysis ID {a_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -415,7 +418,7 @@ class _GetCnvTargetResults(_AutoLoginCmdBase):
                 analysis_ids=analysis_ids,
                 virtual_panel_id=virtual_panel_id,
             )
-        except Exception as exc:
+        except (VarvisError, requests.RequestException) as exc:
             self.logger.error(f'Could not retrieve CNV target results for LIMS-ID "{self.parsed_args.lims_id}": {exc}')
             exit(1)
 
@@ -485,7 +488,7 @@ class _GetPendingCnvSegments(_AutoLoginCmdBase):
 
         try:
             output_data = self.client.get_pending_cnv_segments(**kwargs)
-        except Exception as exc:
+        except (VarvisError, requests.RequestException) as exc:
             id_info = (
                 f'LIMS-ID "{self.parsed_args.lims_id}"'
                 if self.parsed_args.lims_id
@@ -514,7 +517,7 @@ class _GetQcCaseMetricsCmd(_AutoLoginCmdBase):
         for lims_id in self.parsed_args.lims_ids:
             try:
                 output_data[lims_id] = self.client.get_qc_case_metrics(lims_id)
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve QC case metrics for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -550,7 +553,7 @@ class _GetCoverageData(_AutoLoginCmdBase):
         for lims_id in self.parsed_args.lims_ids:
             try:
                 output_data[lims_id] = self.client.get_coverage_data(lims_id, virtual_panel_id)
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve coverage data for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -611,7 +614,7 @@ class _GetPersonAnalyses(_AutoLoginCmdBase):
         for lims_id in self.parsed_args.lims_ids:
             try:
                 output_data[lims_id] = self.client.get_person_analyses(lims_id)
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve analyses for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -648,7 +651,7 @@ class _GetCaseReport(_AutoLoginCmdBase):
                     draft=self.parsed_args.draft,
                     inactive=self.parsed_args.inactive,
                 )
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve analyses for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -671,7 +674,7 @@ class _GetPerson(_AutoLoginCmdBase):
         for lims_id in self.parsed_args.lims_ids:
             try:
                 output_data[lims_id] = self.client.get_person(lims_id)
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve person information for person LIMS-ID {lims_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -810,7 +813,7 @@ class _FindAnalysesByFilename(_AutoLoginCmdBase):
         output_data = None
         try:
             output_data = self.client.find_analyses_by_filename(self.parsed_args.filename)
-        except Exception as exc:
+        except (VarvisError, requests.RequestException) as exc:
             self.logger.error(f"Error while searching for analyses by filename: {exc}")
 
         if output_data is not None:
@@ -842,7 +845,7 @@ class _GetVirtualPanel(_AutoLoginCmdBase):
         for vp_id in self.parsed_args.ids:
             try:
                 output_data[vp_id] = self.client.get_virtual_panel(vp_id)
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Error while retrieving virtual panel {vp_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -865,7 +868,7 @@ class _GetVirtualPanelSummaries(_AutoLoginCmdBase):
         output_data = None
         try:
             output_data = self.client.get_virtual_panel_summaries()
-        except Exception as exc:
+        except (VarvisError, requests.RequestException) as exc:
             self.logger.error(f"Error while retrieving virtual panel summaries: {exc}")
 
         if output_data is not None:
@@ -890,7 +893,7 @@ class _GetAllGenes(_AutoLoginCmdBase):
         output_data = None
         try:
             output_data = self.client.get_all_genes()
-        except Exception as exc:
+        except (VarvisError, requests.RequestException) as exc:
             self.logger.error(f"Error while retrieving all genes: {exc}")
 
         if output_data is not None:
@@ -1082,8 +1085,13 @@ class _GetFileDownloadLinks(_AutoLoginCmdBase):
         for analysis_id in self.parsed_args.analysis_ids:
             try:
                 analysis_id = int(analysis_id)
+            except ValueError:
+                self.logger.warning(f'Invalid analysis ID: "{analysis_id}" -- will skip this')
+                continue
+
+            try:
                 output_data[str(analysis_id)] = self.client.get_file_download_links(analysis_id)
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve file download links for analysis ID {analysis_id}: {exc}")
 
         self._write_file_output(output_data)
@@ -1199,7 +1207,7 @@ class _DownloadFiles(_AutoLoginCmdBase):
                     allow_overwrite=self.parsed_args.overwrite,
                     only_collect_urls=True,
                 )
-            except Exception as exc:
+            except (VarvisError, requests.RequestException) as exc:
                 self.logger.warning(f"Could not retrieve file download links for analysis ID {analysis_id}: {exc}")
                 continue
 
@@ -1217,6 +1225,16 @@ class _DownloadFiles(_AutoLoginCmdBase):
             self.logger.info("No files to download")
             return
 
+        target_path_collisions = VarvisClient.check_download_files_for_path_collisions(urls_and_target_paths)
+        if target_path_collisions:
+            file_list = "\n".join(target_path_collisions)
+            self.logger.error(f"Download target path collision detected for the following file(s):\n{file_list}")
+            self.logger.error(
+                "Two or more downloads would write to the same target path for these files. Use the "
+                "--create-folder-per-id argument to prevent this."
+            )
+            exit(1)
+
         self.logger.info("Starting the following downloads:")
         for i, (url, target_path) in enumerate(urls_and_target_paths.items(), 1):
             self.logger.info(f'Download #{i}: "{target_path.name}" -> "{target_path.parent}"')
@@ -1230,7 +1248,8 @@ class _DownloadFiles(_AutoLoginCmdBase):
             return_messages=show_progress,
         )
         if show_progress:
-            assert isinstance(downloads_result, tuple) and len(downloads_result) == 2
+            if not isinstance(downloads_result, tuple) or len(downloads_result) != 2:
+                raise TypeError("Unexpected return value for download results")
             _, messages = downloads_result
             for lvl, msg in messages:
                 self.logger.log(lvl, msg)
@@ -1283,6 +1302,7 @@ class VarvisCLI:
     }
 
     def run(self) -> None:
+        """Run the selected command and clean up its client session on every command exit path."""
         # set up arguments; logging is not available yet, so we capture errors during setup and log them later
         failed_setup_msg = None
         client_config = {}
@@ -1291,12 +1311,13 @@ class VarvisCLI:
         except RuntimeError as exc:
             failed_setup_msg = str(exc)
 
-        assert self._argparser is not None
-        assert self._parsed_args is not None
+        if self._parsed_args is None:
+            raise RuntimeError("_parsed_args must be initialized")
 
         # set up logging
         self._setup_logging()
-        assert self.logger is not None
+        if self.logger is None:
+            raise RuntimeError("logger must be initialized")
 
         if failed_setup_msg:
             self.logger.critical(failed_setup_msg)
@@ -1326,16 +1347,12 @@ class VarvisCLI:
             os.getenv("TEST_DONT_RUN_CMD", "0")
         ):  # running the actual command can be disabled for testing purposes
             try:
-                cmd_instance.run()
-                cmd_instance.cleanup()
-            except Exception as exc:
-                self.logger.error(exc)
-                self.logger.error(traceback.format_exc())
                 try:
-                    self._client.logout()
-                except Exception as exc:
-                    self.logger.error("Another error occurred during logout:")
-                    self.logger.error(exc)
+                    cmd_instance.run()
+                finally:
+                    cmd_instance.cleanup()
+            except Exception:
+                self.logger.exception("An error occurred while running the command")
                 exit(1)
 
     def _setup_argparser(self) -> dict[str, Any]:
@@ -1423,18 +1440,24 @@ class VarvisCLI:
                 client_config[opt_fieldname] = opt_val
             elif opt_val is None and is_required:
                 if opt_argname == "password":
+                    if "username" not in client_config:
+                        # this should never happen as "username" is processed before "password" in the args list
+                        raise AssertionError("No username given when asking for password")
+
                     client_config[opt_fieldname] = getpass.getpass(
                         f'Password not provided via environment variable or program argument. Please enter the password for user "{client_config["username"]}": '
                     )
                 else:
                     raise RuntimeError(
-                        f'Option "{opt_argname}" is required but not provided. Either pass it as a command-line argument or set the environment variable "{envvar}".'
+                        f'Option "{opt_argname}" is required but not provided. Either pass it as a command-line '
+                        f'argument or set the environment variable "{envvar}".'
                     )
 
         return client_config
 
     def _setup_logging(self) -> None:
-        assert self._parsed_args is not None
+        if self._parsed_args is None:
+            raise RuntimeError("_parsed_args must be initialized")
         log_level_label = self._parsed_args.loglevel.upper()
         log_level_value = LOG_LEVEL_MAPPING.get(log_level_label, -1)
 

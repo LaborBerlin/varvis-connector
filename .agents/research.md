@@ -9,7 +9,7 @@
 
 Its core purpose is not just to wrap HTTP endpoints, but to hide a number of inconsistencies and operational quirks in the upstream Varvis API. The implementation handles a non-standard login flow, endpoint prefix irregularities, inconsistent payload formats, weak error signaling by the API, and session invalidation under concurrency.
 
-The project is fairly mature in terms of developer ergonomics: it has strong documentation, broad automated tests, typed Pydantic models, linting/type-checking/security checks, and CI across Python 3.10 to 3.14. The main architectural weakness is concentration of logic in large modules, especially the CLI module. There are also a few places where runtime `assert` statements are used as correctness guards, which is less robust than explicit error handling.
+The project is fairly mature in terms of developer ergonomics: it has strong documentation, broad automated tests, typed Pydantic models, linting/type-checking/security checks, and CI across Python 3.10 to 3.14. The main architectural weakness is concentration of logic in large modules, especially the CLI module.
 
 The package version is managed in `pyproject.toml`; the repository is on the `0.3.0` release line.
 
@@ -121,6 +121,8 @@ The client stores two internal pieces of state:
 - `_loggedin_csrf`
 
 The `logged_in` property treats both as required for a valid session.
+
+`logout()` clears both pieces of local authentication state in a `finally` block, including when the remote logout request fails. This prevents a failed logout request from leaving the client looking authenticated locally.
 
 ### 3. Request sending model
 
@@ -447,6 +449,8 @@ At runtime:
 6. it creates `VarvisClient`
 7. it instantiates and runs the chosen command
 
+Command cleanup runs after command execution on normal returns, raised errors, and command-level exits. Automatic-login commands use cleanup to send the logout request, while unexpected ordinary exceptions are logged and converted to exit status 1.
+
 ### Good CLI design decisions
 
 - Top-level connection/auth settings are derived from the client definition, reducing duplication.
@@ -504,6 +508,8 @@ Notable details:
 - a placeholder `%ID` is supported in folder naming
 - repeated `--file-pattern` arguments are flattened
 - duplicate URLs across analyses are warned about and overwritten in the aggregate map
+- duplicate resolved target paths from different URLs abort the batch before downloads begin
+- `--create-folder-per-id` separates same-named files belonging to different analyses
 - progress bars can be disabled
 
 This is more sophisticated than a trivial “loop and download”.
@@ -514,7 +520,8 @@ The file download subsystem is one of the more security-sensitive parts of the c
 
 ### Validation before download
 
-Before any file is written, `download_files()` filters out link entries where:
+Before any file is written, `download_files()` filters out invalid link entries and the parallel downloader rejects
+an unsafe batch. The guarded cases are:
 
 - `fileName` is missing
 - `downloadLink` is missing
@@ -524,6 +531,7 @@ Before any file is written, `download_files()` filters out link entries where:
 - file is marked archived
 - target file exists and overwrite is not allowed
 - the same download URL is already collected
+- multiple URLs in a download batch resolve to the same target path
 
 Download filenames are validated as single path components on both POSIX and Windows conventions. The client rejects separators, drive syntax, NUL bytes, and Windows DOS device names, including the superscript-digit COM and LPT aliases, then resolves the target and verifies that it remains under the requested output directory. The CLI applies the same resolved-path confinement check to per-analysis folder templates before creating directories, including templates that traverse through existing symlinks.
 
@@ -536,23 +544,22 @@ For each download:
 - it performs a plain `requests.get(..., stream=True, timeout=...)`
 - it accepts only URLs with an HTTPS scheme and network location
 - checks status code
-- reads `content-length`
+- reads `Content-Length` for identity-encoded responses and verifies the final byte count when the header is valid
 - optionally renders a `tqdm` progress bar
-- writes in chunks of `download_chunk_size`
+- writes chunks to a temporary `.part` file in the destination directory
+- preserves the destination's permissions when overwriting, or uses mode `0664` for a new file
+- atomically replaces the destination with `os.replace()` only after the transfer completes
+- removes partial temporary files after request, filesystem, or interruption failures
 
 Completion is then handled asynchronously through `concurrent.futures.as_completed()`.
+
+Keyboard interruption sets a shared event so active workers stop at chunk boundaries and clean up before the interruption returns to the caller. A preflight collision check compares resolved target paths and refuses to start the thread pool if distinct URLs would write to the same destination.
 
 ### Logging around progress bars
 
 When progress bars are enabled, success/failure log messages are collected and returned rather than logged immediately. The CLI then logs them after all progress bars complete. This avoids output corruption from interleaving logs and progress-bar rendering.
 
 That is a small but well-considered UX detail.
-
-### Minor implementation concern
-
-Inside `download_single_file()`, one exception path uses `logging.error(...)` instead of the provided logger instance. That means those messages may bypass the structured CLI logger configuration.
-
-This is not catastrophic, but it is inconsistent with the rest of the code.
 
 ## Logging Design
 
@@ -733,25 +740,9 @@ The main maintainability issue is file size and concentration of behavior:
 
 This makes local reasoning slower and raises the cost of adding features safely.
 
-#### Use of `assert` in runtime paths
+#### Exception boundaries span a large CLI module
 
-The client uses `assert` in a number of parsing and validation paths. In production code, explicit exceptions are preferable because:
-
-- assertions are meant for internal invariants, not external input validation
-- they can be disabled with optimization flags
-- they often produce less user-oriented diagnostics
-
-Most of these should ideally be converted to explicit `VarvisError` or `TypeError` branches.
-
-#### Broad `except Exception` in CLI command handlers
-
-Many CLI commands catch generic exceptions. That improves robustness for end users, but it also:
-
-- flattens error taxonomy
-- can hide programming errors as operational failures
-- makes it harder to distinguish validation errors from integration bugs
-
-This is not fatal, but it is a tradeoff toward operator convenience over internal strictness.
+Individual retrieval commands catch expected `VarvisError` and `requests.RequestException` failures so batch-oriented commands can continue with other IDs. Unexpected programming errors propagate to the top-level CLI boundary, which logs the traceback and exits with status 1. This is a sound failure policy, although the large command module makes it important to keep each local exception boundary narrow as new commands are added.
 
 #### Some inconsistency in exit handling
 
@@ -769,7 +760,7 @@ The release workflow is one of the higher-risk pieces of repository automation. 
 - Person create/update and virtual-panel create/update return different response shapes.
 - The CLI is intentionally pipeline-friendly and carefully avoids polluting stdout when data output is expected there.
 - Virtual panel update performs client-side merge behavior by fetching the current remote panel first.
-- File download handling has decent filename/path safety checks.
+- File downloads use filename/path safety checks, collision preflight, atomic replacement, size verification when possible, and interruption cleanup.
 - The project is an early but actively publishable package line, with mature tooling and an implemented release pipeline rather than only local build support.
 
 ## Suggested Reading Order For Future Work
@@ -796,5 +787,4 @@ If I were extending it, I would preserve that pragmatic orientation and focus on
 - keeping the transport behavior stable
 - adding endpoint wrappers in the same narrow, validated style
 - gradually splitting the CLI and client into smaller modules
-- replacing runtime `assert` guards with explicit exceptions
 - tightening documentation/workflow synchronization

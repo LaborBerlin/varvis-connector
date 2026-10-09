@@ -14,9 +14,12 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 :author: Markus Konrad <markus.konrad@laborberlin.com>
 """
 
+from collections import Counter
 import concurrent.futures
 import logging
 import os
+import tempfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
@@ -99,7 +102,8 @@ def _jsondata_from_response(resp: Response, data_from_key: str) -> list | dict |
         _raise_varvis_error(jsondata, "Varvis API request did not succeed.")
     try:
         extracted = jsondata[data_from_key]
-        assert isinstance(extracted, list | dict | str | float | int | bool | None)
+        if not isinstance(extracted, list | dict | str | float | int | bool | None):
+            raise VarvisError(f'Response data "{data_from_key}" has unexpected type: {type(extracted)}')
         return extracted
     except KeyError as e:
         raise VarvisError(f"Response does not contain expected data key '{data_from_key}'") from e
@@ -113,7 +117,8 @@ def _parse_response_for_model(model_class: Type[TModel], resp: Response, data_fr
         result = _jsondata_from_response(resp, data_from_key)
         if result is None:
             raise VarvisError("Response data is None")
-        assert isinstance(result, dict)
+        if not isinstance(result, dict):
+            raise VarvisError("Response data should be a dictionary")
         cls_validation_method = getattr(model_class, "model_validate")
         data = result
     else:
@@ -123,7 +128,6 @@ def _parse_response_for_model(model_class: Type[TModel], resp: Response, data_fr
 
     try:
         validated_model = cls_validation_method(data)
-        assert isinstance(validated_model, model_class)
         return validated_model
     except ValidationError as e:
         raise VarvisError(f"Response validation failed: {e}") from e
@@ -140,7 +144,8 @@ def _parse_response_for_model_list(
         data = resp.json()
     cls_validation_method = getattr(model_class, "model_validate")
     return_data = []
-    assert isinstance(data, list)
+    if not isinstance(data, list):
+        raise VarvisError("Response data should be a list")
     for i, item in enumerate(data):
         try:
             return_data.append(cls_validation_method(item))
@@ -161,7 +166,8 @@ def _parse_response_for_primitive(
         except ValueError as e:
             raise VarvisError(f"Response conversion failed: {e}") from e
 
-    assert isinstance(data, None | bool | int | float | str)
+    if not isinstance(data, None | bool | int | float | str):
+        raise VarvisError(f"Parsed response data item has unexpected type: {type(data)}")
     return data
 
 
@@ -416,8 +422,8 @@ class VarvisClient:
         Logs out the user by ending the current session and resetting authentication credentials.
 
         This method ensures that the user is logged out by sending a logout request to the
-        appropriate endpoint. It clears the session data and invalidates the CSRF token upon
-        successful logout. If the user is not logged in, the method will not perform any
+        appropriate endpoint. It clears the session data and invalidates the CSRF token.
+        If the user is not logged in, the method will not perform any
         action and logs a corresponding message.
 
         :raises HTTPError: Indicates a failure during the logout HTTP request.
@@ -430,10 +436,12 @@ class VarvisClient:
         self.logger.info("Logging out")
 
         logout_data = {"_csrf": self._loggedin_csrf}
-        self._send_request("POST", "logout", allow_retries=False, data=logout_data)
 
-        self._reset_state_on_logout()
-        self.logger.info("Logout successful")
+        try:
+            self._send_request("POST", "logout", allow_retries=False, data=logout_data)
+            self.logger.info("Logout successful")
+        finally:
+            self._reset_state_on_logout()
 
     def get_snv_annotations(self, analysis_id: int) -> SnvAnnotationData:
         """
@@ -806,7 +814,9 @@ class VarvisClient:
         )
 
         pers_id = _parse_response_for_primitive(resp, "response", convert_result=int)
-        assert isinstance(pers_id, int)
+        if not isinstance(pers_id, int):
+            raise VarvisError("Parsed response item should be an integer")
+
         return pers_id
 
     def get_pending_cnv_segments(
@@ -893,7 +903,8 @@ class VarvisClient:
             handle_http_errors={400: "Person with given LIMS-ID was not found."},
         )
         data = _jsondata_from_response(resp, "response")
-        assert isinstance(data, dict)
+        if not isinstance(data, dict):
+            raise VarvisError("Parsed response data should be a dictionary")
 
         try:
             metric_results = data["metricResults"].pop(person_lims_id)
@@ -1239,7 +1250,8 @@ class VarvisClient:
 
         resp = self._send_modeldata("virtual-panel", virtual_panel_data)
         vp_id = _parse_response_for_primitive(resp, "response")
-        assert isinstance(vp_id, int)
+        if not isinstance(vp_id, int):
+            raise VarvisError("Parsed response item should be an integer")
         return vp_id
 
     def download_files(
@@ -1259,7 +1271,10 @@ class VarvisClient:
         The function fetches download links and attempts to download the files concurrently
         up to the maximum number of parallel downloads. Files can be filtered using
         specific patterns and duplicate downloads or invalid files are skipped.
-        Logs provide information about failed downloads, skipped files, and completion status.
+        Each file is downloaded to a temporary file in the output directory and atomically
+        moved to its destination after a successful transfer. Failed or interrupted downloads
+        preserve existing destination files and remove partial temporary files. Logs provide
+        information about failed downloads, skipped files, and completion status.
 
         :param analysis_id: Integer representing the unique ID for the analysis data to be downloaded.
         :param output_path: Path where the downloaded files will be stored. Accepts path-like objects.
@@ -1362,6 +1377,18 @@ class VarvisClient:
         )
         return res
 
+    @staticmethod
+    def check_download_files_for_path_collisions(urls_and_targets: dict[str, Path]) -> list[str]:
+        """
+        Return a list of duplicate target paths in ``urls_and_targets``, if any. If there are no collisions, an
+        empty list will be returned.
+
+        :param urls_and_targets: dictionary mapping download URLs to target paths
+        :return: A list of duplicate target paths, if any.
+        """
+        n_items_per_target_path = Counter(map(lambda f: str(f.resolve()), urls_and_targets.values()))
+        return [target_path for target_path, n in n_items_per_target_path.items() if n > 1]
+
     @overload
     def download_files_from_urls_parallel(
         self,
@@ -1403,7 +1430,11 @@ class VarvisClient:
         is downloaded to a specified target location provided in the dictionary. The function keeps
         track of progress and logs success or failure for each file download. Optionally, a progress
         bar can be shown for each download to visualize the current progress. URLs without an HTTPS
-        scheme and network location are rejected.
+        scheme and network location are rejected. Downloads are written to temporary files beside their
+        destinations and atomically moved into place only after successful completion. Partial files are
+        removed after failures or interruptions. When an uncompressed response declares a valid
+        ``Content-Length``, its downloaded byte count is verified before the file is committed. Batches
+        containing multiple URLs that resolve to the same target path are rejected before workers start.
 
         :param urls_and_targets: A dictionary where keys are URLs pointing to files to download and
             values are their respective output file paths where the downloaded files should be stored.
@@ -1415,6 +1446,7 @@ class VarvisClient:
         :return: A dictionary mapping filenames to their respective output paths for successfully
             downloaded files. If ``return_messages`` is True, additionally returns a list of log
             messages.
+        :raises ValueError: If multiple download URLs resolve to the same target path.
         """
 
         def download_single_file(
@@ -1426,6 +1458,7 @@ class VarvisClient:
             connection_timeout: float,
             show_progress_bar: bool,
             download_chunk_size: int,
+            interrpt_event: threading.Event,
         ) -> bool:
             def human_readable_size(size_bytes: int) -> str:
                 units = ["B", "KB", "MB", "GB", "TB", "PB"]
@@ -1436,25 +1469,48 @@ class VarvisClient:
                     size /= 1024.0
                 return f"{size:.2f} PB"
 
+            dl_num1 = download_num + 1
             parsed_url = urlsplit(url)
             if parsed_url.scheme.lower() != "https" or not parsed_url.netloc:
                 logger.error(
                     "Download #%d: Refusing to download a URL that is not HTTPS: %s",
-                    download_num + 1,
+                    dl_num1,
                     url,
                 )
                 return False
 
-            resp = requests.get(url, stream=True, verify=ssl_verify, timeout=connection_timeout)
+            if interrpt_event.is_set():
+                logger.warning(f"Download #{dl_num1}: Download interrupted")
+                return False
+
+            try:
+                resp = requests.get(url, stream=True, verify=ssl_verify, timeout=connection_timeout)
+            except requests.RequestException:
+                logger.exception(f"Download #{dl_num1}: Error on download request")
+                return False
 
             if not resp.ok:
                 logger.error(
-                    f"Download #{download_num + 1}: HTTP error {resp.status_code} while downloading the file: {resp.reason}"
+                    f"Download #{dl_num1}: HTTP error {resp.status_code} while downloading the file: {resp.reason}"
                 )
+                resp.close()
                 return False
 
-            nbytes = int(resp.headers.get("content-length", 0))
-            nbytes_readable = human_readable_size(nbytes)
+            n_downloaded_bytes = 0
+            content_length = None
+            if resp.headers.get("Content-Encoding", "identity") == "identity":
+                try:
+                    content_length = int(resp.headers["Content-Length"])
+                except (KeyError, ValueError):
+                    logger.info(
+                        f"Download #{dl_num1}: No valid Content-Length in HTTP response header -- will omit "
+                        "final content length check of the downloaded file"
+                    )
+            else:
+                logger.info(
+                    f"Download #{dl_num1}: Content-Encoding signals compressed HTTP content -- will omit "
+                    "final content length check of the downloaded file"
+                )
 
             progress_bar_output_stream = None
             if show_progress_bar:
@@ -1463,79 +1519,148 @@ class VarvisClient:
                         progress_bar_output_stream = hndlr.stream
                         break
             else:
+                if content_length is not None:
+                    size_log_str = f"of size {human_readable_size(content_length)}"
+                else:
+                    size_log_str = "of unknown size"
                 logger.info(
-                    f'Download #{download_num + 1}: Downloading file of size {nbytes_readable} to output file "{output_file_path}"...'
+                    f'Download #{dl_num1}: Downloading file {size_log_str} to output file "{output_file_path}"...'
                 )
-                logger.debug(f"Download #{download_num + 1}: URL: {url}")
+                logger.debug(f"Download #{dl_num1}: URL: {url}")
 
             with tqdm(
-                desc=f"Download #{download_num + 1}",
+                desc=f"Download #{dl_num1}",
                 file=progress_bar_output_stream,
-                total=nbytes,
+                total=content_length,
                 unit="B",
                 unit_scale=True,
                 miniters=1,
                 disable=not show_progress_bar,
             ) as progress_bar:
+                tempfile_name = None
                 try:
-                    with open(output_file_path, "wb") as f:
+                    with tempfile.NamedTemporaryFile(
+                        mode="wb", delete=False, dir=output_file_path.parent, suffix=".part"
+                    ) as f:
+                        # store the temporary file name for later deletion if necessary
+                        tempfile_name = f.name
+                        # retain the file permissions
+                        file_mode = output_file_path.stat().st_mode if output_file_path.exists() else 0o664
+                        os.fchmod(f.fileno(), file_mode)
+
+                        # receive and write the file chunks
                         for chunk in resp.iter_content(chunk_size=download_chunk_size):
+                            if interrpt_event.is_set():
+                                raise KeyboardInterrupt()
                             if show_progress_bar:
                                 progress_bar.update(len(chunk))
                             f.write(chunk)
-                except (requests.HTTPError, requests.ConnectionError, OSError) as e:
-                    logging.error(f"Download #{download_num + 1}: Error while downloading the file: {e}")
+                            n_downloaded_bytes += len(chunk)
+
+                    if interrpt_event.is_set():
+                        raise KeyboardInterrupt()
+
+                    if content_length is not None and n_downloaded_bytes != content_length:
+                        logger.error(
+                            f"Download #{dl_num1}: Number of downloaded bytes ({n_downloaded_bytes}) does not "
+                            f"match number of expected bytes ({content_length})"
+                        )
+                        resp.close()
+                        return False
+
+                    os.replace(tempfile_name, output_file_path)
+                except (
+                    requests.RequestException,
+                    OSError,
+                    KeyboardInterrupt,
+                ) as exc:
+                    if isinstance(exc, KeyboardInterrupt):
+                        logger.warning(f"Download #{dl_num1}: Download interrupted")
+                    else:
+                        logger.exception(f"Download #{dl_num1}: Error while downloading the file")
+                    if tempfile_name:
+                        try:
+                            os.unlink(tempfile_name)
+                        except OSError:
+                            pass
+                    resp.close()
                     return False
+                finally:
+                    # clean up temporary file
+                    if tempfile_name:
+                        try:
+                            os.unlink(tempfile_name)
+                        except OSError:
+                            pass
+
+            resp.close()
 
             return True
 
+        # check for duplicate target paths to prevent collisions
+        target_path_collisions = VarvisClient.check_download_files_for_path_collisions(urls_and_targets)
+        if target_path_collisions:
+            collisions_str = "\n".join(target_path_collisions)
+            raise ValueError(
+                "Provided `urls_and_targets` contain duplicate target paths for different download URLs:\n"
+                f"{collisions_str}"
+            )
+
+        interruption_event = threading.Event()
         with ThreadPoolExecutor(max_workers=max_parallel_downloads) as executor:
-            # submit tasks ("futures") to threads
-            futures = {}  # maps Future objects to URLs
-            for i, (url, target_path) in enumerate(urls_and_targets.items()):
-                fut = executor.submit(
-                    download_single_file,
-                    url,
-                    target_path,
-                    download_num=i,
-                    logger=self.logger,
-                    ssl_verify=self.ssl_verify,
-                    connection_timeout=self.connection_timeout,
-                    show_progress_bar=show_progress_bar,
-                    download_chunk_size=self.download_chunk_size,
-                )
-                futures[fut] = (url, i)
+            # enter try-block that catches program cancallation (ctrl-c) as KeyboardInterrupt exception
+            try:
+                # submit tasks ("futures") to threads
+                futures = {}  # maps Future objects to URLs
+                for i, (url, target_path) in enumerate(urls_and_targets.items()):
+                    fut = executor.submit(
+                        download_single_file,
+                        url,
+                        target_path,
+                        download_num=i,
+                        logger=self.logger,
+                        ssl_verify=self.ssl_verify,
+                        connection_timeout=self.connection_timeout,
+                        show_progress_bar=show_progress_bar,
+                        download_chunk_size=self.download_chunk_size,
+                        interrpt_event=interruption_event,
+                    )
+                    futures[fut] = (url, i)
 
-            # iterate through completed tasks (order is random)
-            collected_messages = []  # for deferring messages when using progress bars
-            downloaded_files = {}
-            for fut in concurrent.futures.as_completed(futures):
-                url, download_num = futures[fut]
-                downloaded_target_path = Path(urls_and_targets[url])
-                file_name = downloaded_target_path.name
-                try:
-                    success = fut.result()
-                except Exception as exc:
-                    msg = f'Download #{download_num + 1}: Error while downloading file "{file_name}": {exc}'
-                    if show_progress_bar:
-                        collected_messages.append((logging.ERROR, msg))
-                    else:
-                        self.logger.error(msg)
-                else:
-                    if success:
-                        downloaded_files[file_name] = downloaded_target_path
-
-                        msg = f'Download #{download_num + 1}: Successfully downloaded file "{file_name}"'
-                        if show_progress_bar:
-                            collected_messages.append((logging.INFO, msg))
-                        else:
-                            self.logger.info(msg)
-                    else:
-                        msg = f'Download #{download_num + 1}: Could not download file "{file_name}"'
+                # iterate through completed tasks (order is random)
+                collected_messages = []  # for deferring messages when using progress bars
+                downloaded_files = {}
+                for fut in concurrent.futures.as_completed(futures):
+                    url, download_num = futures[fut]
+                    downloaded_target_path = Path(urls_and_targets[url])
+                    file_name = downloaded_target_path.name
+                    try:
+                        success = fut.result()
+                    except Exception as exc:
+                        msg = f'Download #{download_num + 1}: Error while downloading file "{file_name}": {exc}'
                         if show_progress_bar:
                             collected_messages.append((logging.ERROR, msg))
                         else:
                             self.logger.error(msg)
+                    else:
+                        if success:
+                            downloaded_files[file_name] = downloaded_target_path
+
+                            msg = f'Download #{download_num + 1}: Successfully downloaded file "{file_name}"'
+                            if show_progress_bar:
+                                collected_messages.append((logging.INFO, msg))
+                            else:
+                                self.logger.info(msg)
+                        else:
+                            msg = f'Download #{download_num + 1}: Could not download file "{file_name}"'
+                            if show_progress_bar:
+                                collected_messages.append((logging.ERROR, msg))
+                            else:
+                                self.logger.error(msg)
+            except KeyboardInterrupt:
+                # download interrupted
+                interruption_event.set()
+                raise
 
             if show_progress_bar and not return_messages:
                 # log the collected messages after all downloads completed

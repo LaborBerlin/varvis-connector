@@ -14,14 +14,20 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 :author: Markus Konrad <markus.konrad@laborberlin.com>
 """
 
+from dataclasses import fields
+import logging
 import os
 import random
+import stat
+import threading
 import uuid
 from datetime import date
 from fnmatch import fnmatchcase
 from pathlib import Path
+from unittest import mock
 
 import pytest
+import requests
 from polyfactory.factories.pydantic_factory import ModelFactory
 from requests import Response
 
@@ -173,6 +179,15 @@ def test_from_env(
     assert not v.logged_in
 
 
+def test_varvis_fields_order_username_before_password():
+    """
+    Make sure that username field comes before password field. This is required when asking for the password
+    interactively in VarvisCLI._setup_argparser.
+    """
+    classfields = [f.name for f in fields(VarvisClient)]
+    assert classfields.index("username") < classfields.index("password")
+
+
 def test_post_init(varvis_init_data):
     url, username, password, https_proxy, ssl_verify = varvis_init_data
     url = url.removesuffix("/")
@@ -240,10 +255,28 @@ def test_no_credentials_leakage_in_str_repr():
 def test_logout(varvis):
     varvis.logout()
     assert not varvis.logged_in
+    assert varvis._session is None
+    assert varvis._loggedin_csrf is None
 
     # second logout is not performed
     varvis.logout()
     assert not varvis.logged_in
+
+
+def test_logout_fails_but_state_resets(varvis_mockapi_with_login):
+    varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+    assert varvis.login()
+
+    def mock_send_request(*args, **kwargs):
+        raise TimeoutError("mock error")
+
+    varvis._send_request = mock_send_request
+
+    with pytest.raises(TimeoutError):
+        varvis.logout()
+
+    assert varvis._session is None
+    assert varvis._loggedin_csrf is None
 
 
 def test_not_logged_in(monkeypatch_clean_env):
@@ -1017,6 +1050,286 @@ def test_download_files_from_urls_parallel_rejects_non_https(monkeypatch, varvis
 
     assert result == {}
     assert not (tmp_path / "file").exists()
+
+
+def test_check_download_files_for_path_collisions(tmp_path):
+    """Return each resolved target path once when multiple URLs share it."""
+    # start with two distinct download destinations
+    target_dir = tmp_path / "downloads"
+    target_dir.mkdir()
+    first_target = target_dir / "alignment.bam"
+    second_target = target_dir / "report.vcf"
+    urls_and_targets = {
+        "https://mock-dl/1": first_target,
+        "https://mock-dl/2": second_target,
+    }
+    assert VarvisClient.check_download_files_for_path_collisions(urls_and_targets) == []
+
+    # add an alias for the first destination and repeat both targets
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(target_dir, target_is_directory=True)
+    urls_and_targets["https://mock-dl/3"] = alias_dir / first_target.name
+    urls_and_targets["https://mock-dl/4"] = first_target
+    urls_and_targets["https://mock-dl/5"] = second_target
+
+    assert VarvisClient.check_download_files_for_path_collisions(urls_and_targets) == [
+        str(first_target.resolve()),
+        str(second_target.resolve()),
+    ]
+
+
+@pytest.mark.parametrize("use_symlink", [False, True])
+def test_download_files_from_urls_parallel_rejects_target_path_collision(tmp_path, use_symlink):
+    """Reject distinct URLs that resolve to one target before starting workers."""
+    # create two path spellings that point to the same destination
+    target_dir = tmp_path / "downloads"
+    target_dir.mkdir()
+    second_dir = target_dir
+    if use_symlink:
+        second_dir = tmp_path / "alias"
+        second_dir.symlink_to(target_dir, target_is_directory=True)
+
+    target_path = target_dir / "alignment.bam"
+    urls_and_targets = {
+        "https://mock-dl/1/alignment.bam": target_path,
+        "https://mock-dl/2/alignment.bam": second_dir / "alignment.bam",
+    }
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+
+    # reject the batch before starting any download worker
+    with mock.patch("varvis_connector._varvis_client.ThreadPoolExecutor") as executor_mock:
+        with pytest.raises(ValueError, match="duplicate target paths") as exc_info:
+            client.download_files_from_urls_parallel(
+                urls_and_targets,
+                max_parallel_downloads=2,
+                show_progress_bar=False,
+                return_messages=False,
+            )
+
+    executor_mock.assert_not_called()
+    assert str(target_path) in str(exc_info.value)
+    assert not target_path.exists()
+
+
+@pytest.fixture
+def download_logger(caplog):
+    """Provide a logger whose records can be asserted through pytest's log capture."""
+    # configure a dedicated logger that propagates records to caplog
+    logger = logging.getLogger("download_test")
+    logger.handlers.clear()
+    logger.propagate = True
+    caplog.set_level(logging.INFO, logger=logger.name)
+    return logger
+
+
+@pytest.mark.parametrize("existing_mode", [None, 0o640])
+def test_download_files_from_urls_parallel_commits_atomically(
+    monkeypatch, tmp_path, caplog, download_logger, existing_mode
+):
+    """The destination remains unchanged until a complete download is committed."""
+    # set up a new or existing destination
+    target_path = tmp_path / "sample.bam"
+    if existing_mode is not None:
+        target_path.write_bytes(b"existing data")
+        target_path.chmod(existing_mode)
+
+    # observe the destination while chunks are streamed
+    def iter_content(chunk_size):
+        """Yield download chunks while checking the destination state."""
+        assert chunk_size > 0
+        if existing_mode is None:
+            assert not target_path.exists()
+        else:
+            assert target_path.read_bytes() == b"existing data"
+        assert len(list(tmp_path.glob("*.part"))) == 1
+        yield b"new "
+        yield b"data"
+
+    # return a complete streamed response
+    response = mock.Mock(spec=Response)
+    response.ok = True
+    response.headers = {"Content-Length": "8"}
+    response.iter_content.side_effect = iter_content
+    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", mock.Mock(return_value=response))
+    varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
+    caplog.clear()
+
+    # download and atomically replace the destination
+    result = varvis.download_files_from_urls_parallel(
+        {"https://mock-dl/sample.bam": target_path},
+        max_parallel_downloads=1,
+        show_progress_bar=False,
+        return_messages=False,
+    )
+
+    # verify the committed file and cleanup
+    assert result == {"sample.bam": target_path}
+    assert target_path.read_bytes() == b"new data"
+    expected_mode = 0o664 if existing_mode is None else existing_mode
+    assert stat.S_IMODE(target_path.stat().st_mode) == expected_mode
+    assert not list(tmp_path.glob("*.part"))
+    response.close.assert_called_once_with()
+    assert (download_logger.name, logging.INFO, 'Download #1: Successfully downloaded file "sample.bam"') in (
+        caplog.record_tuples
+    )
+
+
+def test_download_files_from_urls_parallel_cleans_up_after_stream_timeout(
+    monkeypatch, tmp_path, caplog, download_logger
+):
+    """A timeout preserves the destination and removes the partial download."""
+    # set up an existing destination and an interrupted response
+    target_path = tmp_path / "sample.bam"
+    target_path.write_bytes(b"existing data")
+
+    def iter_content(chunk_size):
+        """Yield one chunk before simulating a network timeout."""
+        assert chunk_size > 0
+        yield b"partial"
+        raise requests.Timeout("download timed out")
+
+    # return the interrupted streamed response
+    response = mock.Mock(spec=Response)
+    response.ok = True
+    response.headers = {"Content-Length": "20"}
+    response.iter_content.side_effect = iter_content
+    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", mock.Mock(return_value=response))
+    varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
+    caplog.clear()
+
+    # attempt the interrupted download
+    result = varvis.download_files_from_urls_parallel(
+        {"https://mock-dl/sample.bam": target_path},
+        max_parallel_downloads=1,
+        show_progress_bar=False,
+        return_messages=False,
+    )
+
+    # verify the original destination and cleanup
+    assert result == {}
+    assert target_path.read_bytes() == b"existing data"
+    assert not list(tmp_path.glob("*.part"))
+    response.close.assert_called_once_with()
+    error_records = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert [record.getMessage() for record in error_records] == [
+        "Download #1: Error while downloading the file",
+        'Download #1: Could not download file "sample.bam"',
+    ]
+    assert isinstance(error_records[0].exc_info[1], requests.Timeout)
+
+
+def test_download_files_from_urls_parallel_cleans_up_after_keyboard_interrupt(
+    monkeypatch, tmp_path, caplog, download_logger
+):
+    """A keyboard interrupt stops workers, cleans up, and propagates to the caller."""
+    # set up an existing destination and a continuously streaming response
+    target_path = tmp_path / "sample.bam"
+    target_path.write_bytes(b"existing data")
+    download_started = threading.Event()
+
+    def iter_content(chunk_size):
+        """Stream chunks until the download worker receives the interruption event."""
+        assert chunk_size > 0
+        download_started.set()
+        while True:
+            yield b"partial"
+
+    # interrupt the coordinating thread after the worker starts streaming
+    def interrupt_when_download_started(futures):
+        """Raise a keyboard interrupt once the worker has started downloading."""
+        assert futures
+        assert download_started.wait(timeout=1)
+        raise KeyboardInterrupt
+
+    # return the streaming response and interrupt future collection
+    response = mock.Mock(spec=Response)
+    response.ok = True
+    response.headers = {}
+    response.iter_content.side_effect = iter_content
+    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", mock.Mock(return_value=response))
+    monkeypatch.setattr(
+        "varvis_connector._varvis_client.concurrent.futures.as_completed",
+        interrupt_when_download_started,
+    )
+    varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
+    caplog.clear()
+
+    # verify that the caller receives the interruption
+    with pytest.raises(KeyboardInterrupt):
+        varvis.download_files_from_urls_parallel(
+            {"https://mock-dl/sample.bam": target_path},
+            max_parallel_downloads=1,
+            show_progress_bar=False,
+            return_messages=False,
+        )
+
+    # verify the original destination and cleanup
+    assert target_path.read_bytes() == b"existing data"
+    assert not list(tmp_path.glob("*.part"))
+    response.close.assert_called_once_with()
+    assert (download_logger.name, logging.WARNING, "Download #1: Download interrupted") in caplog.record_tuples
+
+
+def test_download_files_from_urls_parallel_rejects_incomplete_content(monkeypatch, tmp_path, caplog, download_logger):
+    """A cleanly ended response with missing bytes is not committed."""
+    # return fewer bytes than declared by the response
+    response = mock.Mock(spec=Response)
+    response.ok = True
+    response.headers = {"Content-Length": "20"}
+    response.iter_content.return_value = [b"partial"]
+    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", mock.Mock(return_value=response))
+    varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
+    caplog.clear()
+    target_path = tmp_path / "sample.bam"
+
+    # attempt the incomplete download
+    result = varvis.download_files_from_urls_parallel(
+        {"https://mock-dl/sample.bam": target_path},
+        max_parallel_downloads=1,
+        show_progress_bar=False,
+        return_messages=False,
+    )
+
+    # verify that no incomplete file remains
+    assert result == {}
+    assert not target_path.exists()
+    assert not list(tmp_path.glob("*.part"))
+    response.close.assert_called_once_with()
+    assert (
+        download_logger.name,
+        logging.ERROR,
+        "Download #1: Number of downloaded bytes (7) does not match number of expected bytes (20)",
+    ) in caplog.record_tuples
+
+
+def test_download_files_from_urls_parallel_handles_request_timeout(monkeypatch, tmp_path, caplog, download_logger):
+    """A timeout before receiving a response does not escape the worker."""
+    # make the initial download request time out
+    request = mock.Mock(side_effect=requests.Timeout("request timed out"))
+    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", request)
+    varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
+    caplog.clear()
+    target_path = tmp_path / "sample.bam"
+
+    # attempt the timed-out request
+    result = varvis.download_files_from_urls_parallel(
+        {"https://mock-dl/sample.bam": target_path},
+        max_parallel_downloads=1,
+        show_progress_bar=False,
+        return_messages=False,
+    )
+
+    # verify that no download artifacts remain
+    assert result == {}
+    assert not target_path.exists()
+    assert not list(tmp_path.glob("*.part"))
+    request.assert_called_once()
+    error_records = [record for record in caplog.records if record.levelno == logging.ERROR]
+    assert [record.getMessage() for record in error_records] == [
+        "Download #1: Error on download request",
+        'Download #1: Could not download file "sample.bam"',
+    ]
+    assert isinstance(error_records[0].exc_info[1], requests.Timeout)
 
 
 @pytest.mark.parametrize(
