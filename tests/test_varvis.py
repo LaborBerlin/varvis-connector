@@ -245,10 +245,28 @@ def test_no_credentials_leakage_in_str_repr():
 def test_logout(varvis):
     varvis.logout()
     assert not varvis.logged_in
+    assert varvis._session is None
+    assert varvis._loggedin_csrf is None
 
     # second logout is not performed
     varvis.logout()
     assert not varvis.logged_in
+
+
+def test_logout_fails_but_state_resets(varvis_mockapi_with_login):
+    varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+    assert varvis.login()
+
+    def mock_send_request(*args, **kwargs):
+        raise TimeoutError("mock error")
+
+    varvis._send_request = mock_send_request
+
+    with pytest.raises(TimeoutError):
+        varvis.logout()
+
+    assert varvis._session is None
+    assert varvis._loggedin_csrf is None
 
 
 def test_not_logged_in(monkeypatch_clean_env):
