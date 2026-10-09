@@ -1052,6 +1052,65 @@ def test_download_files_from_urls_parallel_rejects_non_https(monkeypatch, varvis
     assert not (tmp_path / "file").exists()
 
 
+def test_check_download_files_for_path_collisions(tmp_path):
+    """Return each resolved target path once when multiple URLs share it."""
+    # start with two distinct download destinations
+    target_dir = tmp_path / "downloads"
+    target_dir.mkdir()
+    first_target = target_dir / "alignment.bam"
+    second_target = target_dir / "report.vcf"
+    urls_and_targets = {
+        "https://mock-dl/1": first_target,
+        "https://mock-dl/2": second_target,
+    }
+    assert VarvisClient.check_download_files_for_path_collisions(urls_and_targets) == []
+
+    # add an alias for the first destination and repeat both targets
+    alias_dir = tmp_path / "alias"
+    alias_dir.symlink_to(target_dir, target_is_directory=True)
+    urls_and_targets["https://mock-dl/3"] = alias_dir / first_target.name
+    urls_and_targets["https://mock-dl/4"] = first_target
+    urls_and_targets["https://mock-dl/5"] = second_target
+
+    assert VarvisClient.check_download_files_for_path_collisions(urls_and_targets) == [
+        str(first_target.resolve()),
+        str(second_target.resolve()),
+    ]
+
+
+@pytest.mark.parametrize("use_symlink", [False, True])
+def test_download_files_from_urls_parallel_rejects_target_path_collision(tmp_path, use_symlink):
+    """Reject distinct URLs that resolve to one target before starting workers."""
+    # create two path spellings that point to the same destination
+    target_dir = tmp_path / "downloads"
+    target_dir.mkdir()
+    second_dir = target_dir
+    if use_symlink:
+        second_dir = tmp_path / "alias"
+        second_dir.symlink_to(target_dir, target_is_directory=True)
+
+    target_path = target_dir / "alignment.bam"
+    urls_and_targets = {
+        "https://mock-dl/1/alignment.bam": target_path,
+        "https://mock-dl/2/alignment.bam": second_dir / "alignment.bam",
+    }
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+
+    # reject the batch before starting any download worker
+    with mock.patch("varvis_connector._varvis_client.ThreadPoolExecutor") as executor_mock:
+        with pytest.raises(ValueError, match="duplicate target paths") as exc_info:
+            client.download_files_from_urls_parallel(
+                urls_and_targets,
+                max_parallel_downloads=2,
+                show_progress_bar=False,
+                return_messages=False,
+            )
+
+    executor_mock.assert_not_called()
+    assert str(target_path) in str(exc_info.value)
+    assert not target_path.exists()
+
+
 @pytest.fixture
 def download_logger(caplog):
     """Provide a logger whose records can be asserted through pytest's log capture."""

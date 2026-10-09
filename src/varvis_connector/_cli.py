@@ -1225,6 +1225,16 @@ class _DownloadFiles(_AutoLoginCmdBase):
             self.logger.info("No files to download")
             return
 
+        target_path_collisions = VarvisClient.check_download_files_for_path_collisions(urls_and_target_paths)
+        if target_path_collisions:
+            file_list = "\n".join(target_path_collisions)
+            self.logger.error(f"Download target path collision detected for the following file(s):\n{file_list}")
+            self.logger.error(
+                "Two or more downloads would write to the same target path for these files. Use the "
+                "--create-folder-per-id argument to prevent this."
+            )
+            exit(1)
+
         self.logger.info("Starting the following downloads:")
         for i, (url, target_path) in enumerate(urls_and_target_paths.items(), 1):
             self.logger.info(f'Download #{i}: "{target_path.name}" -> "{target_path.parent}"')
