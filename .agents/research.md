@@ -447,6 +447,8 @@ At runtime:
 6. it creates `VarvisClient`
 7. it instantiates and runs the chosen command
 
+Command cleanup runs after command execution on normal returns, raised errors, and command-level exits. Automatic-login commands use cleanup to send the logout request, while unexpected ordinary exceptions are logged and converted to exit status 1.
+
 ### Good CLI design decisions
 
 - Top-level connection/auth settings are derived from the client definition, reducing duplication.

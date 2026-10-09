@@ -1302,6 +1302,7 @@ class VarvisCLI:
     }
 
     def run(self) -> None:
+        """Run the selected command and clean up its client session on every command exit path."""
         # set up arguments; logging is not available yet, so we capture errors during setup and log them later
         failed_setup_msg = None
         client_config = {}
@@ -1346,14 +1347,12 @@ class VarvisCLI:
             os.getenv("TEST_DONT_RUN_CMD", "0")
         ):  # running the actual command can be disabled for testing purposes
             try:
-                cmd_instance.run()
-                cmd_instance.cleanup()
+                try:
+                    cmd_instance.run()
+                finally:
+                    cmd_instance.cleanup()
             except Exception:
                 self.logger.exception("An error occurred while running the command")
-                try:
-                    self._client.logout()
-                except Exception:
-                    self.logger.exception("Another error occurred during logout")
                 exit(1)
 
     def _setup_argparser(self) -> dict[str, Any]:
