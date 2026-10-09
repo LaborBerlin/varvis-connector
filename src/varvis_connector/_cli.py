@@ -1431,12 +1431,17 @@ class VarvisCLI:
                 client_config[opt_fieldname] = opt_val
             elif opt_val is None and is_required:
                 if opt_argname == "password":
+                    if "username" not in client_config:
+                        # this should never happen as "username" is processed before "password" in the args list
+                        raise AssertionError("No username given when asking for password")
+
                     client_config[opt_fieldname] = getpass.getpass(
                         f'Password not provided via environment variable or program argument. Please enter the password for user "{client_config["username"]}": '
                     )
                 else:
                     raise RuntimeError(
-                        f'Option "{opt_argname}" is required but not provided. Either pass it as a command-line argument or set the environment variable "{envvar}".'
+                        f'Option "{opt_argname}" is required but not provided. Either pass it as a command-line '
+                        f'argument or set the environment variable "{envvar}".'
                     )
 
         return client_config

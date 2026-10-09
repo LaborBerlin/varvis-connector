@@ -14,6 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 :author: Markus Konrad <markus.konrad@laborberlin.com>
 """
 
+from dataclasses import fields
 import logging
 import os
 import random
@@ -176,6 +177,15 @@ def test_from_env(
     assert v.backoff_factor_seconds == backoff_factor_seconds
     assert v.backoff_max_tries == backoff_max_tries
     assert not v.logged_in
+
+
+def test_varvis_fields_order_username_before_password():
+    """
+    Make sure that username field comes before password field. This is required when asking for the password
+    interactively in VarvisCLI._setup_argparser.
+    """
+    classfields = [f.name for f in fields(VarvisClient)]
+    assert classfields.index("username") < classfields.index("password")
 
 
 def test_post_init(varvis_init_data):
