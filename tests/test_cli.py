@@ -479,6 +479,30 @@ def test_unexpected_retrieval_errors_reach_top_level_handler(capfd, monkeypatch,
     assert "Could not retrieve internal person ID" not in captured.err
 
 
+def test_command_exit_logs_out_once(capfd, monkeypatch, tmp_path, varvis_mockapi_with_login):
+    """A command that exits early must still log out exactly once."""
+    # trigger a command-level exit after login with an invalid analysis ID
+    _set_up_cmd_args_and_env_with_output(
+        tmp_path,
+        monkeypatch,
+        "get-cnv-target-results",
+        False,
+        None,
+        ["test-lims-id", "invalid-analysis-id"],
+    )
+
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+
+    # verify the original exit code and one logout request
+    assert exc_info.value.code == 1
+    assert "Provided analysis IDs must all be integers" in capfd.readouterr().err
+    logout_requests = [
+        request for request in varvis_mockapi_with_login.request_history if request.url == MOCK_URL + "logout"
+    ]
+    assert len(logout_requests) == 1
+
+
 @pytest.mark.parametrize(
     "analysis_ids_and_expected_data, output_to_file, output_indent",
     [
