@@ -1745,6 +1745,50 @@ def test_download_files_rejects_folder_template_outside_output_dir(
     assert "escapes the output directory" in capfd.readouterr().err
 
 
+def test_download_files_rejects_target_path_collision(capfd, monkeypatch, tmp_path, varvis_mockapi_with_login):
+    """Reject batch downloads when distinct URLs would write to the same file."""
+    # serve the same filename from different analysis-specific URLs
+    for analysis_id in (1, 2):
+        varvis_mockapi_with_login.get(
+            f"{MOCK_URL}api/analysis/{analysis_id}/get-file-download-links",
+            json={
+                "success": True,
+                "response": {
+                    "id": analysis_id,
+                    "customerProvidedInputFilePaths": [],
+                    "apiFileLinks": [
+                        {
+                            "fileName": "alignment.bam",
+                            "downloadLink": f"https://mock-dl/{analysis_id}/alignment.bam",
+                            "currentlyArchived": False,
+                        }
+                    ],
+                },
+            },
+        )
+
+    # request concurrent downloads into a shared output directory
+    _set_up_cmd_args_and_env_with_output(
+        tmp_path,
+        monkeypatch,
+        "download-files",
+        False,
+        None,
+        ["1", "2", "--output-dir", str(tmp_path), "--parallel-downloads", "2", "--no-progress"],
+    )
+    with mock.patch.object(VarvisClient, "download_files_from_urls_parallel") as download_mock:
+        with pytest.raises(SystemExit) as exc_info:
+            main()
+
+    # reject the batch before either URL can write the colliding file
+    assert exc_info.value.code == 1
+    download_mock.assert_not_called()
+    assert not (tmp_path / "alignment.bam").exists()
+    err = capfd.readouterr().err
+    assert "Download target path collision detected" in err
+    assert "alignment.bam" in err
+
+
 @pytest.mark.parametrize(
     "method, endpoint, raw_input, input_data, input_from_file, output_to_file, output_indent, simulate_error",
     [

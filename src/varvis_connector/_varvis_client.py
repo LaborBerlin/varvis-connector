@@ -14,6 +14,7 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 :author: Markus Konrad <markus.konrad@laborberlin.com>
 """
 
+from collections import Counter
 import concurrent.futures
 import logging
 import os
@@ -1373,6 +1374,18 @@ class VarvisClient:
         )
         return res
 
+    @staticmethod
+    def check_download_files_for_path_collisions(urls_and_targets: dict[str, Path]) -> list[str]:
+        """
+        Return a list of duplicate target paths in ``urls_and_targets``, if any. If there are no collisions, an
+        empty list will be returned.
+
+        :param urls_and_targets: dictionary mapping download URLs to target paths
+        :return list of duplicate target paths, if any
+        """
+        n_items_per_target_path = Counter(map(lambda f: str(f.resolve()), urls_and_targets.values()))
+        return [target_path for target_path, n in n_items_per_target_path.items() if n > 1]
+
     @overload
     def download_files_from_urls_parallel(
         self,
@@ -1575,6 +1588,15 @@ class VarvisClient:
             resp.close()
 
             return True
+
+        # check for duplicate target paths to prevent collisions
+        target_path_collisions = VarvisClient.check_download_files_for_path_collisions(urls_and_targets)
+        if target_path_collisions:
+            collisions_str = "\n".join(target_path_collisions)
+            raise ValueError(
+                "Provided `urls_and_targets` contain duplicate target paths for different download URLs:\n"
+                f"{collisions_str}"
+            )
 
         interruption_event = threading.Event()
         with ThreadPoolExecutor(max_workers=max_parallel_downloads) as executor:
