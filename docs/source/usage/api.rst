@@ -123,3 +123,17 @@ You can inspect or retrieve the SNV annotation header schema without loading all
     for col in header:
         print(col.id, col.title)
 
+Downloading Files
+-----------------
+
+The :meth:`~varvis_connector.VarvisClient.download_files` method downloads each file to a temporary file beside its
+destination and atomically replaces the destination only after the transfer completes. Failed or interrupted
+downloads preserve existing destination files and remove their partial temporary files. When the server provides a
+valid ``Content-Length`` for an uncompressed response, the client also verifies the downloaded byte count before
+committing the file.
+
+The lower-level :meth:`~varvis_connector.VarvisClient.download_files_from_urls_parallel` method rejects a batch before
+starting workers if different URLs resolve to the same target path. Call
+:meth:`~varvis_connector.VarvisClient.check_download_files_for_path_collisions` first when assembling download batches
+from multiple sources and you need to report collisions yourself.
+

@@ -1271,7 +1271,10 @@ class VarvisClient:
         The function fetches download links and attempts to download the files concurrently
         up to the maximum number of parallel downloads. Files can be filtered using
         specific patterns and duplicate downloads or invalid files are skipped.
-        Logs provide information about failed downloads, skipped files, and completion status.
+        Each file is downloaded to a temporary file in the output directory and atomically
+        moved to its destination after a successful transfer. Failed or interrupted downloads
+        preserve existing destination files and remove partial temporary files. Logs provide
+        information about failed downloads, skipped files, and completion status.
 
         :param analysis_id: Integer representing the unique ID for the analysis data to be downloaded.
         :param output_path: Path where the downloaded files will be stored. Accepts path-like objects.
@@ -1381,7 +1384,7 @@ class VarvisClient:
         empty list will be returned.
 
         :param urls_and_targets: dictionary mapping download URLs to target paths
-        :return list of duplicate target paths, if any
+        :return: A list of duplicate target paths, if any.
         """
         n_items_per_target_path = Counter(map(lambda f: str(f.resolve()), urls_and_targets.values()))
         return [target_path for target_path, n in n_items_per_target_path.items() if n > 1]
@@ -1427,7 +1430,11 @@ class VarvisClient:
         is downloaded to a specified target location provided in the dictionary. The function keeps
         track of progress and logs success or failure for each file download. Optionally, a progress
         bar can be shown for each download to visualize the current progress. URLs without an HTTPS
-        scheme and network location are rejected.
+        scheme and network location are rejected. Downloads are written to temporary files beside their
+        destinations and atomically moved into place only after successful completion. Partial files are
+        removed after failures or interruptions. When an uncompressed response declares a valid
+        ``Content-Length``, its downloaded byte count is verified before the file is committed. Batches
+        containing multiple URLs that resolve to the same target path are rejected before workers start.
 
         :param urls_and_targets: A dictionary where keys are URLs pointing to files to download and
             values are their respective output file paths where the downloaded files should be stored.
@@ -1439,6 +1446,7 @@ class VarvisClient:
         :return: A dictionary mapping filenames to their respective output paths for successfully
             downloaded files. If ``return_messages`` is True, additionally returns a list of log
             messages.
+        :raises ValueError: If multiple download URLs resolve to the same target path.
         """
 
         def download_single_file(

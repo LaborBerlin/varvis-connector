@@ -526,6 +526,12 @@ download-files
 
 Downloads files for given analysis IDs.
 
+Files are downloaded to temporary files in the target directory and moved into place only after the download
+finishes successfully. Existing destination files therefore remain unchanged if a download fails or is interrupted,
+and temporary partial files are removed. If different download URLs would resolve to the same target path, the
+command stops before starting any downloads. Use ``--create-folder-per-id`` when analyses contain files with the same
+name.
+
 **Usage:**
 
 .. code-block:: bash
@@ -545,7 +551,7 @@ Downloads files for given analysis IDs.
 - ``--output-dir``: Optional output directory for downloaded files. Defaults to the current working directory.
 - ``--create-folder-per-id``: If set, create a separate folder for each analysis ID using this folder name template. The template can contain the placeholder "%ID" which will be replaced by the analysis ID. If this placeholder is not given, the analysis ID will be simply appended. By default, no folders will be created and all files will be written to the directory specified by the "--output-dir" option.
 - ``--file-pattern``: Optional file pattern(s) to filter the files to download. Pass glob-style patterns as arguments like ``'*.gz'`` and always use quotes to prevent shell expansion. Argument can be repeated.
-- ``--overwrite``: Set this if existing files should be overwritten.
+- ``--overwrite``: Set this if existing files should be replaced after their downloads finish successfully.
 - ``--no-progress``: Set this if no progress bar should be shown during the download.
 - ``--parallel-downloads``: Maximum number of parallel downloads. Defaults to 1 (no parallel downloads).
 
