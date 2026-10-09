@@ -421,8 +421,8 @@ class VarvisClient:
         Logs out the user by ending the current session and resetting authentication credentials.
 
         This method ensures that the user is logged out by sending a logout request to the
-        appropriate endpoint. It clears the session data and invalidates the CSRF token upon
-        successful logout. If the user is not logged in, the method will not perform any
+        appropriate endpoint. It clears the session data and invalidates the CSRF token.
+        If the user is not logged in, the method will not perform any
         action and logs a corresponding message.
 
         :raises HTTPError: Indicates a failure during the logout HTTP request.
@@ -435,10 +435,12 @@ class VarvisClient:
         self.logger.info("Logging out")
 
         logout_data = {"_csrf": self._loggedin_csrf}
-        self._send_request("POST", "logout", allow_retries=False, data=logout_data)
 
-        self._reset_state_on_logout()
-        self.logger.info("Logout successful")
+        try:
+            self._send_request("POST", "logout", allow_retries=False, data=logout_data)
+            self.logger.info("Logout successful")
+        finally:
+            self._reset_state_on_logout()
 
     def get_snv_annotations(self, analysis_id: int) -> SnvAnnotationData:
         """
