@@ -35,7 +35,9 @@ The following environment variables are optional:
 
 - ``HTTPS_PROXY``: Sets a proxy for all communication with the API.
 - ``VARVIS_SSL_VERIFY`` (0 or 1): Disables SSL certificate verification when set to 0 – **only do this for development and testing (may be necessary in that case for some corporate network configurations where routers inspect SSL traffic).**
-- ``VARVIS_CONNECTION_TIMEOUT``: Set a connection timeout (default is 10s).
+- ``VARVIS_CONNECTION_TIMEOUT``: Set the legacy timeout for both connection and response reads (default is 10s).
+- ``VARVIS_CONNECT_TIMEOUT``: Optionally set a connection timeout independently in seconds.
+- ``VARVIS_READ_TIMEOUT``: Optionally set a response-read timeout independently in seconds.
 - ``VARVIS_BACKOFF_FACTOR_SECONDS``: Backoff factor in seconds for retries in case an API request fails. Default is 0.5s.
 - ``VARVIS_BACKOFF_MAX_TRIES``: Maximum number of tries for in case an API request fails (must be at least 1).
 

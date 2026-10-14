@@ -148,6 +148,8 @@ def monkeypatch_clean_env(monkeypatch):
         "VARVIS_PASSWORD",
         "HTTPS_PROXY",
         "VARVIS_SSL_VERIFY",
+        "VARVIS_CONNECT_TIMEOUT",
+        "VARVIS_READ_TIMEOUT",
     }
     for var in envvars:
         if os.getenv(var) is not None:
@@ -313,6 +315,10 @@ def test_required_args(capfd, monkeypatch_clean_env, drop_arg, set_envvar, expec
         ("disable-ssl-verify", None, "VARVIS_SSL_VERIFY", "0"),
         ("connection-timeout", 1.5, None, None),
         ("connection-timeout", None, "VARVIS_CONNECTION_TIMEOUT", 1.52),
+        ("connect-timeout", 1.5, None, None),
+        ("connect-timeout", None, "VARVIS_CONNECT_TIMEOUT", 1.52),
+        ("read-timeout", 1.5, None, None),
+        ("read-timeout", None, "VARVIS_READ_TIMEOUT", 1.52),
         ("backoff-factor-seconds", 0, None, None),
         ("backoff-factor-seconds", None, "VARVIS_BACKOFF_FACTOR_SECONDS", 1.3),
         ("backoff-max-tries", 2, None, None),

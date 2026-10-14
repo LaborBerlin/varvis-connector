@@ -36,7 +36,7 @@ from requests import Response
 from tqdm import tqdm
 
 from ._log import default_logger
-from .errors import VarvisError
+from .errors import VarvisError, VarvisTimeoutError, VarvisTransportError
 from ._snv_stream_parser import stream_snv_json_payload, resolve_header_indices
 from .models import (
     SnvAnnotationData,
@@ -208,7 +208,9 @@ class VarvisClient:
     :ivar password: The password used for Varvis authentication.
     :ivar https_proxy: Optional HTTPS proxy URL to use for API requests.
     :ivar ssl_verify: Whether to verify SSL certificates for API requests.
-    :ivar connection_timeout: Timeout in seconds for API requests.
+    :ivar connection_timeout: Legacy timeout in seconds for both connection and response reads.
+    :ivar connect_timeout: Optional connection timeout in seconds.
+    :ivar read_timeout: Optional response-read timeout in seconds.
     :ivar backoff_factor_seconds: Base factor for exponential backoff between retries.
     :ivar backoff_max_tries: Maximum number of retry attempts for failed requests.
     :ivar logger: Logger instance for recording operations and errors.
@@ -235,7 +237,18 @@ class VarvisClient:
             "argname": "disable-ssl-verify",
         },
     )
-    connection_timeout: float = field(default=10.0, metadata={"help": "Timeout in seconds for API requests"})
+    connection_timeout: float = field(
+        default=10.0,
+        metadata={"help": "Timeout in seconds for API requests when no phase-specific timeout is set"},
+    )
+    connect_timeout: float | None = field(
+        default=None,
+        metadata={"help": "Optional connection timeout in seconds"},
+    )
+    read_timeout: float | None = field(
+        default=None,
+        metadata={"help": "Optional response-read timeout in seconds"},
+    )
     backoff_factor_seconds: float = field(
         default=0.5,
         metadata={"help": "Base factor for exponential backoff between retries"},
@@ -280,6 +293,15 @@ class VarvisClient:
         if self.backoff_max_tries < 1:
             raise ValueError("backoff_max_tries must be a strictly positive integer")
 
+        # validate all configured request timeouts
+        for timeout_name, timeout in {
+            "connection_timeout": self.connection_timeout,
+            "connect_timeout": self.connect_timeout,
+            "read_timeout": self.read_timeout,
+        }.items():
+            if timeout is not None and timeout <= 0:
+                raise ValueError(f"{timeout_name} must be a strictly positive number")
+
     def __repr__(self) -> str:
         return (
             f"VarvisClient(api_url={self.api_url}, "
@@ -288,6 +310,8 @@ class VarvisClient:
             f"https_proxy={self.https_proxy}, "
             f"ssl_verify={self.ssl_verify}, "
             f"connection_timeout={self.connection_timeout}, "
+            f"connect_timeout={self.connect_timeout}, "
+            f"read_timeout={self.read_timeout}, "
             f"backoff_factor_seconds={self.backoff_factor_seconds}, "
             f"backoff_max_tries={self.backoff_max_tries})"
         )
@@ -304,13 +328,15 @@ class VarvisClient:
             "https_proxy",
             "ssl_verify",
             "connection_timeout",
+            "connect_timeout",
+            "read_timeout",
             "backoff_factor_seconds",
             "backoff_max_tries",
         }:
             prefix = "VARVIS_" if key != "https_proxy" else ""
             value: Any = os.getenv(prefix + key.upper())
             if value is not None:
-                if key in {"connection_timeout", "backoff_factor_seconds"}:
+                if key in {"connection_timeout", "connect_timeout", "read_timeout", "backoff_factor_seconds"}:
                     value = float(value)
                 elif key == "backoff_max_tries":
                     value = int(value)
@@ -319,6 +345,18 @@ class VarvisClient:
                 kwargs[key] = value
 
         return cls(url, username, password, **kwargs)
+
+    @property
+    def request_timeout(self) -> float | tuple[float, float]:
+        """Return the Requests timeout using phase-specific values when configured."""
+        if self.connect_timeout is None and self.read_timeout is None:
+            return self.connection_timeout
+
+        # fill an unspecified phase with the legacy timeout
+        return (
+            self.connect_timeout if self.connect_timeout is not None else self.connection_timeout,
+            self.read_timeout if self.read_timeout is not None else self.connection_timeout,
+        )
 
     @property
     def logged_in(self) -> bool:
@@ -355,7 +393,7 @@ class VarvisClient:
 
         # get initial session cookie and CSRF code
         self.logger.debug("Acquiring initial session")
-        initial_resp = self._session.head(self.api_url, stream=True)
+        initial_resp = self._session.head(self.api_url, stream=True, timeout=self.request_timeout)
         if raise_for_status:
             initial_resp.raise_for_status()
         elif not initial_resp.ok:
@@ -1455,7 +1493,7 @@ class VarvisClient:
             download_num: int,
             logger: logging.Logger,
             ssl_verify: bool,
-            connection_timeout: float,
+            request_timeout: float | tuple[float, float],
             show_progress_bar: bool,
             download_chunk_size: int,
             interrpt_event: threading.Event,
@@ -1484,7 +1522,7 @@ class VarvisClient:
                 return False
 
             try:
-                resp = requests.get(url, stream=True, verify=ssl_verify, timeout=connection_timeout)
+                resp = requests.get(url, stream=True, verify=ssl_verify, timeout=request_timeout)
             except requests.RequestException:
                 logger.exception(f"Download #{dl_num1}: Error on download request")
                 return False
@@ -1620,7 +1658,7 @@ class VarvisClient:
                         download_num=i,
                         logger=self.logger,
                         ssl_verify=self.ssl_verify,
-                        connection_timeout=self.connection_timeout,
+                        request_timeout=self.request_timeout,
                         show_progress_bar=show_progress_bar,
                         download_chunk_size=self.download_chunk_size,
                         interrpt_event=interruption_event,
@@ -1805,6 +1843,8 @@ class VarvisClient:
         request_url = self.api_url + endpoint
 
         resp = None
+        last_transport_error: requests.RequestException | None = None
+        transport_failure_kind: str | None = None
         n_tries = 1
         max_retries = self.backoff_max_tries if allow_retries else 1
         while True:
@@ -1839,7 +1879,7 @@ class VarvisClient:
                         request_url,
                         stream=stream,
                         allow_redirects=False,
-                        timeout=self.connection_timeout,
+                        timeout=self.request_timeout,
                         **kwargs,
                     )
                     self.logger.debug("Response received with status code %d", resp.status_code)
@@ -1854,11 +1894,25 @@ class VarvisClient:
                         retry = True
                         self._reset_state_on_logout()
                         resp = None
-                except requests.ConnectionError:
-                    self.logger.debug("Connection error")
+                except requests.ConnectTimeout as exc:
+                    self.logger.debug("Connection timeout")
+                    last_transport_error = exc
+                    transport_failure_kind = "connect_timeout"
                     retry = True
-                except requests.Timeout:
+                except requests.ReadTimeout as exc:
+                    self.logger.debug("Read timeout")
+                    last_transport_error = exc
+                    transport_failure_kind = "read_timeout"
+                    retry = True
+                except requests.Timeout as exc:
                     self.logger.debug("Timeout error")
+                    last_transport_error = exc
+                    transport_failure_kind = "timeout"
+                    retry = True
+                except requests.ConnectionError as exc:
+                    self.logger.debug("Connection error")
+                    last_transport_error = exc
+                    transport_failure_kind = "connection"
                     retry = True
 
             if retry and n_tries < max_retries:
@@ -1870,7 +1924,13 @@ class VarvisClient:
                 break
 
         if resp is None:
-            raise VarvisError(f"Failed to send request to Varvis API after {self.backoff_max_tries} tries")
+            if last_transport_error is not None and transport_failure_kind is not None:
+                # retain transport failure identity for callers
+                error_class = (
+                    VarvisTimeoutError if isinstance(last_transport_error, requests.Timeout) else VarvisTransportError
+                )
+                raise error_class(transport_failure_kind, n_tries) from last_transport_error
+            raise VarvisError(f"Failed to send request to Varvis API after {n_tries} attempts")
 
         if handle_http_errors and resp.status_code in handle_http_errors:
             custom_error_msg = handle_http_errors[resp.status_code]
