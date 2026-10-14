@@ -91,6 +91,8 @@ Main configuration fields:
 - `https_proxy`
 - `ssl_verify`
 - `connection_timeout`
+- `connect_timeout`
+- `read_timeout`
 - `backoff_factor_seconds`
 - `backoff_max_tries`
 - `download_chunk_size`
@@ -100,7 +102,7 @@ Notable implementation details:
 
 - `__post_init__` normalizes trailing slash on `api_url`
 - the CLI suppresses `urllib3` insecure-request warnings when verification is disabled, while direct `VarvisClient` use leaves process-wide warning filters unchanged
-- it validates retry/backoff settings up front
+- it validates retry/backoff and timeout settings up front
 - `__repr__` and `__str__` deliberately mask the password as `***`
 
 ### 2. Session and authentication model
@@ -135,7 +137,7 @@ Responsibilities of `_send_request()`:
 - decide whether to auto-prepend `api/`
 - send the request through the shared `requests.Session`
 - disable redirects
-- retry on connection/timeouts
+- retry on connection/timeouts while preserving the final transport exception as the cause of a typed error
 - detect a forced logout pattern and re-login
 - map selected HTTP statuses into `VarvisError`
 - otherwise optionally call `raise_for_status()`
@@ -275,7 +277,7 @@ That consistency makes the library easy to extend.
 The client can be fully initialized from environment variables:
 
 - required: `VARVIS_URL`, `VARVIS_USER`, `VARVIS_PASSWORD`
-- optional: `HTTPS_PROXY`, `VARVIS_SSL_VERIFY`, `VARVIS_CONNECTION_TIMEOUT`, `VARVIS_BACKOFF_FACTOR_SECONDS`, `VARVIS_BACKOFF_MAX_TRIES`
+- optional: `HTTPS_PROXY`, `VARVIS_SSL_VERIFY`, `VARVIS_CONNECTION_TIMEOUT`, `VARVIS_CONNECT_TIMEOUT`, `VARVIS_READ_TIMEOUT`, `VARVIS_BACKOFF_FACTOR_SECONDS`, `VARVIS_BACKOFF_MAX_TRIES`
 
 Type conversion is handled manually, including string-to-bool conversion for `ssl_verify`.
 

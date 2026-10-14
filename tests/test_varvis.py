@@ -118,6 +118,8 @@ def monkeypatch_clean_env(monkeypatch):
         "VARVIS_PASSWORD",
         "HTTPS_PROXY",
         "VARVIS_SSL_VERIFY",
+        "VARVIS_CONNECT_TIMEOUT",
+        "VARVIS_READ_TIMEOUT",
     }
     for var in envvars:
         if os.getenv(var) is not None:
@@ -127,12 +129,12 @@ def monkeypatch_clean_env(monkeypatch):
 
 
 @pytest.mark.parametrize(
-    "with_proxy, ssl_verify, connection_timeout, backoff_factor_seconds, backoff_max_tries",
+    "with_proxy, ssl_verify, connection_timeout, connect_timeout, read_timeout, backoff_factor_seconds, backoff_max_tries",
     [
-        (True, True, 1, 2, 3),
-        (False, True, 0.1, 0.2, 1),
-        (True, False, 0.1, 0, 10),
-        (False, False, 5, 0, 99),
+        (True, True, 1, None, None, 2, 3),
+        (False, True, 0.1, 0.2, 0.3, 0.2, 1),
+        (True, False, 0.1, 0.2, 5, 0, 10),
+        (False, False, 5, None, 7, 0, 99),
     ],
 )
 def test_from_env(
@@ -140,6 +142,8 @@ def test_from_env(
     with_proxy,
     ssl_verify,
     connection_timeout,
+    connect_timeout,
+    read_timeout,
     backoff_factor_seconds,
     backoff_max_tries,
 ):
@@ -161,6 +165,10 @@ def test_from_env(
         monkeypatch_clean_env.setenv("VARVIS_SSL_VERIFY", "0")
 
     monkeypatch_clean_env.setenv("VARVIS_CONNECTION_TIMEOUT", str(connection_timeout))
+    if connect_timeout is not None:
+        monkeypatch_clean_env.setenv("VARVIS_CONNECT_TIMEOUT", str(connect_timeout))
+    if read_timeout is not None:
+        monkeypatch_clean_env.setenv("VARVIS_READ_TIMEOUT", str(read_timeout))
     monkeypatch_clean_env.setenv("VARVIS_BACKOFF_FACTOR_SECONDS", str(backoff_factor_seconds))
     monkeypatch_clean_env.setenv("VARVIS_BACKOFF_MAX_TRIES", str(backoff_max_tries))
 
@@ -174,6 +182,8 @@ def test_from_env(
         assert v.https_proxy is None
     assert v.ssl_verify == ssl_verify
     assert v.connection_timeout == connection_timeout
+    assert v.connect_timeout == connect_timeout
+    assert v.read_timeout == read_timeout
     assert v.backoff_factor_seconds == backoff_factor_seconds
     assert v.backoff_max_tries == backoff_max_tries
     assert not v.logged_in

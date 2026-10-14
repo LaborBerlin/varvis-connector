@@ -24,7 +24,9 @@ These options apply to all commands:
 * ``--password PASSWORD``: The password for Varvis authentication. If not provided, the value from the ``VARVIS_PASSWORD`` environment variable will be used. If neither the option nor the environment variable is set, the program will prompt for the password. **Warning:** Passing a password as a command-line option may expose it in process listings and shell history. The CLI displays a warning when this option is used; prefer ``VARVIS_PASSWORD`` or the interactive prompt.
 * ``--https-proxy PROXY``: HTTPS proxy to use for all communication with the API. If not provided, the value from the ``HTTPS_PROXY`` environment variable will be used.
 * ``--ssl-verify {0,1}``: Whether to verify SSL certificates. If not provided, the value from the ``VARVIS_SSL_VERIFY`` environment variable will be used. Default is 1 (verify).
-* ``--connection-timeout SECONDS``: HTTP connection timeout in seconds. If not provided, the value from the ``VARVIS_CONNECTION_TIMEOUT`` environment variable will be used. Default is 10 seconds.
+* ``--connection-timeout SECONDS``: Legacy HTTP timeout in seconds for both connection and response reads. If not provided, the value from the ``VARVIS_CONNECTION_TIMEOUT`` environment variable will be used. Default is 10 seconds.
+* ``--connect-timeout SECONDS``: Optional connection timeout in seconds. If not provided, the value from the ``VARVIS_CONNECT_TIMEOUT`` environment variable will be used.
+* ``--read-timeout SECONDS``: Optional response-read timeout in seconds. If not provided, the value from the ``VARVIS_READ_TIMEOUT`` environment variable will be used.
 * ``--backoff-factor SECONDS``: Backoff factor for API retries in seconds. If not provided, the value from the ``VARVIS_BACKOFF_FACTOR_SECONDS`` environment variable will be used. Default is 0.5 seconds.
 * ``--backoff-max-tries TRIES``: Maximum number of API tries. If not provided, the value from the ``VARVIS_BACKOFF_MAX_TRIES`` environment variable will be used. Default is 5.
 * ``--verbose``: Enable verbose output.

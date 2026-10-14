@@ -54,7 +54,9 @@ The ``VarvisClient`` constructor accepts the following parameters:
 * ``password`` (str): The password for Varvis authentication.
 * ``https_proxy`` (str, optional): HTTPS proxy to use.
 * ``ssl_verify`` (bool, optional): Whether to verify SSL certificates. Default is ``True``.
-* ``connection_timeout`` (float, optional): HTTP connection timeout in seconds. Default is 10 seconds.
+* ``connection_timeout`` (float, optional): Legacy HTTP timeout in seconds for both connection and response reads. Default is 10 seconds.
+* ``connect_timeout`` (float, optional): Connection timeout in seconds. When set with or without ``read_timeout``, phase-specific timeouts are used.
+* ``read_timeout`` (float, optional): Response-read timeout in seconds. When set with or without ``connect_timeout``, phase-specific timeouts are used.
 * ``backoff_factor_seconds`` (float, optional): Backoff factor for API retries in seconds. Default is 0.5 seconds.
 * ``backoff_max_tries`` (int, optional): Maximum number of API tries. Default is 5.
 * ``logger`` (logging.Logger, optional): Logger instance to use instead of default logger.

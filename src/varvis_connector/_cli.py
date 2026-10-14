@@ -1374,7 +1374,7 @@ class VarvisCLI:
                     kwargs["action"] = "store_false" if field.default else "store_true"
                 else:
                     if isinstance(field.type, UnionType):
-                        types_not_none = [t for t in field.type.__args__ if t is not None]
+                        types_not_none = [t for t in field.type.__args__ if t is not type(None)]
                         if len(types_not_none) == 1:
                             kwargs["type"] = types_not_none[0]
                     else:
