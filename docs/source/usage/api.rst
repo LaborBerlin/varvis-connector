@@ -57,8 +57,12 @@ The ``VarvisClient`` constructor accepts the following parameters:
 * ``connection_timeout`` (float, optional): Legacy HTTP timeout in seconds for both connection and response reads. Default is 10 seconds.
 * ``connect_timeout`` (float, optional): Connection timeout in seconds. When set with or without ``read_timeout``, phase-specific timeouts are used.
 * ``read_timeout`` (float, optional): Response-read timeout in seconds. When set with or without ``connect_timeout``, phase-specific timeouts are used.
-* ``backoff_factor_seconds`` (float, optional): Backoff factor for API retries in seconds. Default is 0.5 seconds.
-* ``backoff_max_tries`` (int, optional): Maximum number of API tries. Default is 5.
+* ``backoff_factor_seconds`` (float, optional): Backoff factor for API request and session recovery retries in seconds. Default is 0.5 seconds. Request retry delays use full jitter, chosen uniformly between zero and ``backoff_factor_seconds * 2 ** (retry_number - 1)``; zero disables delays. Shared session recovery uses deterministic exponential backoff.
+* ``backoff_max_tries`` (int, optional): Maximum attempts per API request and per shared session recovery. Default is 5.
+* ``download_pool_size`` (int, optional): Number of cached download connection pools. Default is 0, which uses the parallel download worker count.
+* ``download_pool_max_size`` (int, optional): Maximum connections retained per download pool. Default is 0, which uses the parallel download worker count.
+* ``download_backoff_factor_seconds`` (float, optional): Independent backoff factor for download retries with full jitter. Default is 0.5 seconds; zero disables delays.
+* ``download_max_retries`` (int, optional): Maximum HTTP adapter retries per download request. Default is 2, allowing three attempts in total. Before each retry, the delay is chosen uniformly between zero and ``download_backoff_factor_seconds * 2 ** (retry_number - 1)``. Failures while streaming the response body are not retried.
 * ``logger`` (logging.Logger, optional): Logger instance to use instead of default logger.
 
 Authentication
@@ -71,6 +75,14 @@ Before making any API calls, you must authenticate:
     client.login()
 
 The client will automatically handle session management, including refreshing the authentication token when needed.
+
+Concurrent requests using an invalidated session share one recovery sequence. One worker
+performs up to ``backoff_max_tries`` re-login attempts in total while the others wait for
+the result. This login budget is separate from each request's HTTP attempt budget and
+does not include the initial explicit login. All affected workers receive the recovered
+session or the recovery failure, including workers whose responses arrive late. A later
+API request can start a fresh recovery sequence after a failed one. Requests with
+``allow_retries=False`` do not initiate automatic recovery.
 
 To explicitly log out and end the session:
 
@@ -127,6 +139,19 @@ You can inspect or retrieve the SNV annotation header schema without loading all
 
 Downloading Files
 -----------------
+
+Parallel downloads share a connection-pooled HTTP session for each batch, reusing connections
+to the same host. By default, both the cached pool count and the connections retained per
+pool use ``max_parallel_downloads``. Override these with ``download_pool_size`` and
+``download_pool_max_size`` when constructing the client. The session closes after all
+download workers finish.
+
+Download request retries use a separate budget and backoff from API requests and session
+recovery. With the defaults, a download request has up to three attempts, with random
+delays of 0–0.5 seconds before the first retry and 0–1 second before the second.
+``download_max_retries=0`` disables download retries, and
+``download_backoff_factor_seconds=0`` disables their delays. Failures while streaming
+the response body are cleaned up without restarting the download.
 
 The :meth:`~varvis_connector.VarvisClient.download_files` method downloads each file to a temporary file beside its
 destination and atomically replaces the destination only after the transfer completes. Failed or interrupted

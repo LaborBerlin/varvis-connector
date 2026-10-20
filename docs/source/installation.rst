@@ -38,8 +38,16 @@ The following environment variables are optional:
 - ``VARVIS_CONNECTION_TIMEOUT``: Set the legacy timeout for both connection and response reads (default is 10s).
 - ``VARVIS_CONNECT_TIMEOUT``: Optionally set a connection timeout independently in seconds.
 - ``VARVIS_READ_TIMEOUT``: Optionally set a response-read timeout independently in seconds.
-- ``VARVIS_BACKOFF_FACTOR_SECONDS``: Backoff factor in seconds for retries in case an API request fails. Default is 0.5s.
-- ``VARVIS_BACKOFF_MAX_TRIES``: Maximum number of tries for in case an API request fails (must be at least 1).
+- ``VARVIS_BACKOFF_FACTOR_SECONDS``: Backoff factor in seconds for API request retries with full jitter and shared session recovery with deterministic exponential backoff. Default is 0.5s; zero disables delays.
+- ``VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS``: Independent download retry backoff factor in seconds with full jitter. Default is 0.5s; zero disables delays.
+- ``VARVIS_BACKOFF_MAX_TRIES``: Maximum attempts per API request and per shared session recovery, with separate budgets. Default is 5; must be at least 1.
+
+The CLI and ``VarvisClient.from_env()`` also accept these integer download settings:
+
+- ``VARVIS_DOWNLOAD_CHUNK_SIZE``: Bytes read per download chunk. Default is 5242880 (5 MiB).
+- ``VARVIS_DOWNLOAD_POOL_SIZE``: Number of cached download connection pools. Default is 0, which uses the parallel download worker count.
+- ``VARVIS_DOWNLOAD_POOL_MAX_SIZE``: Maximum connections retained per download pool. Default is 0, which uses the parallel download worker count.
+- ``VARVIS_DOWNLOAD_MAX_RETRIES``: Maximum HTTP adapter retries per download request. Default is 2, allowing three attempts in total; zero disables retries.
 
 Additional environment variables must be set for testing environments. See the :ref:`development` chapter.
 

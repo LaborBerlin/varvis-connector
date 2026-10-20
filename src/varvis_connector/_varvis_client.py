@@ -18,6 +18,7 @@ from collections import Counter
 import concurrent.futures
 import logging
 import os
+import random
 import tempfile
 import threading
 import time
@@ -32,8 +33,10 @@ from collections.abc import Collection, Iterator, Sequence
 
 import requests
 from pydantic import BaseModel, ValidationError
-from requests import Response
+from requests import Response, Session
+from requests.adapters import HTTPAdapter
 from tqdm import tqdm
+from urllib3.util.retry import Retry
 
 from ._log import default_logger
 from .errors import VarvisError, VarvisTimeoutError, VarvisTransportError
@@ -193,6 +196,27 @@ def _raise_varvis_error(error_data: dict[str, str | None], custom_error_msg: str
     )
 
 
+class _DownloadRetry(Retry):
+    """Apply exponential backoff with full jitter before each download retry."""
+
+    def get_backoff_time(self) -> float:
+        """Return a random delay bounded by the exponential wait for this retry."""
+        # the first retry uses the base factor, followed by a doubled delay on each retry
+        if not self.history:
+            return 0.0
+        max_wait = min(self.backoff_max, self.backoff_factor * 2 ** (len(self.history) - 1))
+        # non-cryptographic randomness is sufficient for spreading download retries
+        return random.uniform(0, max_wait)  # nosec B311
+
+
+@dataclass
+class _SessionState:
+    """Associate an authenticated session with its shared recovery outcome."""
+
+    session: requests.Session
+    recovery: concurrent.futures.Future["_SessionState"] = field(default_factory=concurrent.futures.Future)
+
+
 @dataclass
 class VarvisClient:
     """
@@ -211,12 +235,23 @@ class VarvisClient:
     :ivar connection_timeout: Legacy timeout in seconds for both connection and response reads.
     :ivar connect_timeout: Optional connection timeout in seconds.
     :ivar read_timeout: Optional response-read timeout in seconds.
-    :ivar backoff_factor_seconds: Base factor for exponential backoff between retries.
-    :ivar backoff_max_tries: Maximum number of retry attempts for failed requests.
+    :ivar backoff_factor_seconds: Base factor for API request backoff with full jitter and deterministic session
+        recovery backoff.
+    :ivar backoff_max_tries: Maximum attempts per API request and per shared session recovery.
+    :ivar download_chunk_size: Number of bytes read per chunk when downloading files.
+    :ivar download_pool_size: Number of cached download connection pools. Zero uses the parallel worker count.
+    :ivar download_pool_max_size: Maximum connections retained per download pool. Zero uses the parallel worker count.
+    :ivar download_max_retries: Maximum HTTP adapter retries per download request.
+    :ivar download_backoff_factor_seconds: Base factor for download retry backoff with full jitter.
     :ivar logger: Logger instance for recording operations and errors.
     :ivar _session: The HTTP session used for Varvis API communication,
         initialized during login and cleared during logout.
+    :ivar _session_lock: The reentrant lock protecting authentication state and login operations.
+    :ivar _recovery_lock: The lock for joining recovery without waiting for login I/O.
     :ivar _loggedin_csrf: The CSRF token used for API requests after login.
+    :ivar _session_state: The authenticated session and its shared recovery outcome.
+    :ivar request_timeout: The read-only HTTP timeout, using phase-specific values when configured.
+    :ivar logged_in: The read-only authentication status, read under the session lock.
     """
 
     api_url: str = field(metadata={"help": "Varvis API URL", "envvar": "VARVIS_URL"})
@@ -255,18 +290,37 @@ class VarvisClient:
     )
     backoff_max_tries: int = field(
         default=5,
-        metadata={"help": "Maximum number of API request attempts. Must be at least 1"},
+        metadata={"help": "Maximum attempts per API request and per shared session recovery. Must be at least 1"},
     )
     download_chunk_size: int = field(
         default=5 * 1024 * 1024,
         metadata={"help": "Chunk size in bytes for file downloads. Default is 5MB"},
     )
+    download_pool_size: int = field(
+        default=0,
+        metadata={"help": "Number of cached download connection pools. 0 uses the parallel download worker count"},
+    )
+    download_pool_max_size: int = field(
+        default=0,
+        metadata={"help": "Maximum connections retained per download pool. 0 uses the parallel download worker count"},
+    )
+    download_max_retries: int = field(
+        default=2,
+        metadata={"help": "Maximum HTTP adapter retries per download request. Default is 2"},
+    )
+    download_backoff_factor_seconds: float = field(
+        default=0.5,
+        metadata={"help": "Base factor in seconds for exponential download retry backoff with full jitter"},
+    )
     logger: logging.Logger = logging.Logger("not_initialized", -1)
     _session: requests.Session | None = None
+    _session_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
+    _recovery_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
     _loggedin_csrf: str | None = None
+    _session_state: _SessionState | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Additional setup steps."""
+        """Normalize client settings and validate backoff and timeout limits."""
 
         if not self.api_url:
             raise ValueError("API URL must be provided")
@@ -290,6 +344,8 @@ class VarvisClient:
 
         if self.backoff_factor_seconds < 0:
             raise ValueError("backoff_factor_seconds must be a non-negative number")
+        if self.download_backoff_factor_seconds < 0:
+            raise ValueError("download_backoff_factor_seconds must be a non-negative number")
         if self.backoff_max_tries < 1:
             raise ValueError("backoff_max_tries must be a strictly positive integer")
 
@@ -321,6 +377,8 @@ class VarvisClient:
 
     @classmethod
     def from_env(cls) -> "VarvisClient":
+        """Create a client using authentication, timeout, retry, and download settings from the environment."""
+        # read credentials and convert optional environment settings to their constructor types
         url, username, password = [os.getenv("VARVIS_" + s, "") for s in ("URL", "USER", "PASSWORD")]
 
         kwargs = {}
@@ -331,14 +389,31 @@ class VarvisClient:
             "connect_timeout",
             "read_timeout",
             "backoff_factor_seconds",
+            "download_backoff_factor_seconds",
             "backoff_max_tries",
+            "download_chunk_size",
+            "download_pool_size",
+            "download_pool_max_size",
+            "download_max_retries",
         }:
             prefix = "VARVIS_" if key != "https_proxy" else ""
             value: Any = os.getenv(prefix + key.upper())
             if value is not None:
-                if key in {"connection_timeout", "connect_timeout", "read_timeout", "backoff_factor_seconds"}:
+                if key in {
+                    "connection_timeout",
+                    "connect_timeout",
+                    "read_timeout",
+                    "backoff_factor_seconds",
+                    "download_backoff_factor_seconds",
+                }:
                     value = float(value)
-                elif key == "backoff_max_tries":
+                elif key in {
+                    "backoff_max_tries",
+                    "download_chunk_size",
+                    "download_pool_size",
+                    "download_pool_max_size",
+                    "download_max_retries",
+                }:
                     value = int(value)
                 elif key == "ssl_verify":
                     value = value.lower() in {"true", "1"} if value else True
@@ -361,7 +436,8 @@ class VarvisClient:
     @property
     def logged_in(self) -> bool:
         """Check if the user is logged in."""
-        return self._session is not None and self._loggedin_csrf is not None
+        with self._session_lock:
+            return self._session is not None and self._loggedin_csrf is not None
 
     def login(self, raise_for_status: bool = True) -> bool:
         """
@@ -369,6 +445,10 @@ class VarvisClient:
         a session, retrieves the necessary cookies and CSRF token, and submits the user's
         credentials to authenticate. After a successful login, the session is updated
         with the new cookies and CSRF token required for subsequent authenticated requests.
+
+        Login is serialized with session acquisition and invalidation. Failed login attempts
+        clear the partially initialized session before releasing the lock. Successful login
+        creates a shared recovery outcome for requests using the authenticated session.
 
         This method raises an error if the CSRF token is not found in the initial response
         or if the login fails due to missing CSRF token in the login response.
@@ -378,80 +458,87 @@ class VarvisClient:
         :raises HTTPError: Indicates a failure during the HTTP communication with the varvis API.
         :return: True if the login was successful, False otherwise.
         """
-        if self.logged_in:
-            self.logger.info("Already logged in -- not performing a new login")
-            return True
+        with self._session_lock:
+            if self.logged_in:
+                self.logger.info("Already logged in -- not performing a new login")
+                return True
 
-        self.logger.info("Logging in")
+            self.logger.info("Logging in")
 
-        # set initial session
-        self._session = requests.Session()
-        self._session.verify = self.ssl_verify
+            # clear incomplete authentication before releasing the lock
+            try:
+                # set initial session
+                self._session = requests.Session()
+                self._session.verify = self.ssl_verify
 
-        if self.https_proxy:
-            self._session.proxies = {"https": self.https_proxy}
+                if self.https_proxy:
+                    self._session.proxies = {"https": self.https_proxy}
 
-        # get initial session cookie and CSRF code
-        self.logger.debug("Acquiring initial session")
-        initial_resp = self._session.head(self.api_url, stream=True, timeout=self.request_timeout)
-        if raise_for_status:
-            initial_resp.raise_for_status()
-        elif not initial_resp.ok:
-            self.logger.error("Could not acquire initial session -- aborting login")
-            self._reset_state_on_logout()
-            return False
+                # get initial session cookie and CSRF code
+                self.logger.debug("Acquiring initial session")
+                initial_resp = self._session.head(self.api_url, stream=True, timeout=self.request_timeout)
+                if raise_for_status:
+                    initial_resp.raise_for_status()
+                elif not initial_resp.ok:
+                    self.logger.error("Could not acquire initial session -- aborting login")
+                    return False
 
-        initial_cookies = initial_resp.cookies
-        initial_csrf = initial_resp.headers.get("X-CSRF-TOKEN", None)
-        if not initial_csrf:
-            if raise_for_status:
-                raise VarvisError("CSRF token not found in initial response")
-            else:
-                self.logger.error("CSRF token not found in initial response")
-                self._reset_state_on_logout()
-                return False
-        self.logger.debug("Initial session OK")
+                initial_cookies = initial_resp.cookies
+                initial_csrf = initial_resp.headers.get("X-CSRF-TOKEN", None)
+                if not initial_csrf:
+                    if raise_for_status:
+                        raise VarvisError("CSRF token not found in initial response")
+                    else:
+                        self.logger.error("CSRF token not found in initial response")
+                        return False
+                self.logger.debug("Initial session OK")
 
-        # log in using the provided credentials, CSRF code and initial cookie
-        login_data = {
-            "username": self.username,
-            "password": self.password,
-            "_csrf": initial_csrf,
-        }
+                # log in using the provided credentials, CSRF code and initial cookie
+                login_data = {
+                    "username": self.username,
+                    "password": self.password,
+                    "_csrf": initial_csrf,
+                }
 
-        self.logger.debug("Acquiring login session")
-        login_resp = self._send_request(
-            "POST",
-            "login",
-            allow_retries=False,
-            raise_for_status=raise_for_status,
-            cookies=initial_cookies,
-            data=login_data,
-        )
+                self.logger.debug("Acquiring login session")
+                login_resp = self._send_request(
+                    "POST",
+                    "login",
+                    allow_retries=False,
+                    raise_for_status=raise_for_status,
+                    cookies=initial_cookies,
+                    data=login_data,
+                )
 
-        # get the session cookie and CSRF code that can be used for the rest of the session
-        loggedin_cookies = login_resp.cookies
-        loggedin_csrf = login_resp.headers.get("X-CSRF-TOKEN", None)
-        if not loggedin_csrf:
-            # it seems the varvis API responds with HTTP 200 OK in case the login fails, but doesn't return a CSRF in that case
-            if raise_for_status:
-                raise VarvisError("Login failed (CSRF token not found in login response)")
-            else:
-                self.logger.error("Login failed (CSRF token not found in login response)")
-                self._reset_state_on_logout()
-                return False
+                # get the session cookie and CSRF code that can be used for the rest of the session
+                loggedin_cookies = login_resp.cookies
+                loggedin_csrf = login_resp.headers.get("X-CSRF-TOKEN", None)
+                if not loggedin_csrf:
+                    # it seems the varvis API responds with HTTP 200 OK in case the login fails, but doesn't return a CSRF in that case
+                    if raise_for_status:
+                        raise VarvisError("Login failed (CSRF token not found in login response)")
+                    else:
+                        self.logger.error("Login failed (CSRF token not found in login response)")
+                        return False
 
-        self.logger.debug("Login session OK")
+                self.logger.debug("Login session OK")
 
-        if api_build_version := login_resp.headers.get("BUILD-VERSION", None):
-            self.logger.debug("Varvis API build version: %s", api_build_version)
+                if api_build_version := login_resp.headers.get("BUILD-VERSION", None):
+                    self.logger.debug("Varvis API build version: %s", api_build_version)
 
-        # set cookies and CSRF for further requests
-        self._session.cookies.update(loggedin_cookies)
-        self._session.headers.update({"X-CSRF-TOKEN": loggedin_csrf})
-        self._loggedin_csrf = loggedin_csrf
+                # set cookies and CSRF for further requests
+                self._session.cookies.update(loggedin_cookies)
+                self._session.headers.update({"X-CSRF-TOKEN": loggedin_csrf})
+                self._loggedin_csrf = loggedin_csrf
+                # publish the authenticated record without blocking new recovery participants on login I/O
+                with self._recovery_lock:
+                    self._session_state = _SessionState(self._session)
 
-        self.logger.info("Login successful")
+                self.logger.info("Login successful")
+
+            finally:
+                if not self.logged_in:
+                    self._reset_state_on_logout(clear_recovery=False)
 
         return True
 
@@ -1473,6 +1560,9 @@ class VarvisClient:
         removed after failures or interruptions. When an uncompressed response declares a valid
         ``Content-Length``, its downloaded byte count is verified before the file is committed. Batches
         containing multiple URLs that resolve to the same target path are rejected before workers start.
+        Requests share a pooled session and retry transport failures up to ``download_max_retries``
+        times, with exponential backoff and full jitter based on ``download_backoff_factor_seconds``.
+        Interrupted response bodies are not retried.
 
         :param urls_and_targets: A dictionary where keys are URLs pointing to files to download and
             values are their respective output file paths where the downloaded files should be stored.
@@ -1488,6 +1578,7 @@ class VarvisClient:
         """
 
         def download_single_file(
+            sess: Session,
             url: str,
             output_file_path: Path,
             download_num: int,
@@ -1522,7 +1613,7 @@ class VarvisClient:
                 return False
 
             try:
-                resp = requests.get(url, stream=True, verify=ssl_verify, timeout=request_timeout)
+                resp = sess.get(url, stream=True, verify=ssl_verify, timeout=request_timeout)
             except requests.RequestException:
                 logger.exception(f"Download #{dl_num1}: Error on download request")
                 return False
@@ -1644,66 +1735,83 @@ class VarvisClient:
                 f"{collisions_str}"
             )
 
-        interruption_event = threading.Event()
-        with ThreadPoolExecutor(max_workers=max_parallel_downloads) as executor:
-            # enter try-block that catches program cancallation (ctrl-c) as KeyboardInterrupt exception
-            try:
-                # submit tasks ("futures") to threads
-                futures = {}  # maps Future objects to URLs
-                for i, (url, target_path) in enumerate(urls_and_targets.items()):
-                    fut = executor.submit(
-                        download_single_file,
-                        url,
-                        target_path,
-                        download_num=i,
-                        logger=self.logger,
-                        ssl_verify=self.ssl_verify,
-                        request_timeout=self.request_timeout,
-                        show_progress_bar=show_progress_bar,
-                        download_chunk_size=self.download_chunk_size,
-                        interrpt_event=interruption_event,
-                    )
-                    futures[fut] = (url, i)
+        # set up a connection pool
+        with Session() as sess:
+            sess_adapter = HTTPAdapter(
+                pool_connections=self.download_pool_size or max_parallel_downloads,
+                pool_maxsize=self.download_pool_max_size or max_parallel_downloads,
+                max_retries=_DownloadRetry(
+                    total=self.download_max_retries,
+                    backoff_factor=self.download_backoff_factor_seconds,
+                ),
+            )
+            sess.mount("http://", sess_adapter)
+            sess.mount("https://", sess_adapter)
 
-                # iterate through completed tasks (order is random)
-                collected_messages = []  # for deferring messages when using progress bars
-                downloaded_files = {}
-                for fut in concurrent.futures.as_completed(futures):
-                    url, download_num = futures[fut]
-                    downloaded_target_path = Path(urls_and_targets[url])
-                    file_name = downloaded_target_path.name
-                    try:
-                        success = fut.result()
-                    except Exception as exc:
-                        msg = f'Download #{download_num + 1}: Error while downloading file "{file_name}": {exc}'
-                        if show_progress_bar:
-                            collected_messages.append((logging.ERROR, msg))
-                        else:
-                            self.logger.error(msg)
-                    else:
-                        if success:
-                            downloaded_files[file_name] = downloaded_target_path
+            # download in parallel
+            interruption_event = threading.Event()
+            with ThreadPoolExecutor(max_workers=max_parallel_downloads) as executor:
+                # enter try-block that catches program cancallation (ctrl-c) as KeyboardInterrupt exception
+                try:
+                    # submit tasks ("futures") to threads
+                    futures = {}  # maps Future objects to URLs
+                    for i, (url, target_path) in enumerate(urls_and_targets.items()):
+                        fut = executor.submit(
+                            download_single_file,
+                            sess,
+                            url,
+                            target_path,
+                            download_num=i,
+                            logger=self.logger,
+                            ssl_verify=self.ssl_verify,
+                            request_timeout=self.request_timeout,
+                            show_progress_bar=show_progress_bar,
+                            download_chunk_size=self.download_chunk_size,
+                            interrpt_event=interruption_event,
+                        )
+                        futures[fut] = (url, i)
 
-                            msg = f'Download #{download_num + 1}: Successfully downloaded file "{file_name}"'
-                            if show_progress_bar:
-                                collected_messages.append((logging.INFO, msg))
-                            else:
-                                self.logger.info(msg)
-                        else:
-                            msg = f'Download #{download_num + 1}: Could not download file "{file_name}"'
+                    # iterate through completed tasks (order is random)
+                    collected_messages = []  # for deferring messages when using progress bars
+                    downloaded_files = {}
+                    for fut in concurrent.futures.as_completed(futures):
+                        url, download_num = futures[fut]
+                        downloaded_target_path = Path(urls_and_targets[url])
+                        file_name = downloaded_target_path.name
+                        try:
+                            success = fut.result()
+                        except Exception as exc:
+                            msg = f'Download #{download_num + 1}: Error while downloading file "{file_name}": {exc}'
                             if show_progress_bar:
                                 collected_messages.append((logging.ERROR, msg))
                             else:
                                 self.logger.error(msg)
-            except KeyboardInterrupt:
-                # download interrupted
-                interruption_event.set()
-                raise
+                        else:
+                            if success:
+                                downloaded_files[file_name] = downloaded_target_path
 
-            if show_progress_bar and not return_messages:
-                # log the collected messages after all downloads completed
-                for lvl, msg in collected_messages:
-                    self.logger.log(lvl, msg)
+                                msg = f'Download #{download_num + 1}: Successfully downloaded file "{file_name}"'
+                                if show_progress_bar:
+                                    collected_messages.append((logging.INFO, msg))
+                                else:
+                                    self.logger.info(msg)
+                            else:
+                                msg = f'Download #{download_num + 1}: Could not download file "{file_name}"'
+                                if show_progress_bar:
+                                    collected_messages.append((logging.ERROR, msg))
+                                else:
+                                    self.logger.error(msg)
+                except KeyboardInterrupt:
+                    # download interrupted
+                    interruption_event.set()
+                    raise
+
+                if show_progress_bar and not return_messages:
+                    # log the collected messages after all downloads completed
+                    for lvl, msg in collected_messages:
+                        self.logger.log(lvl, msg)
+
+        # return results
         if return_messages:
             return downloaded_files, collected_messages
         else:
@@ -1780,6 +1888,53 @@ class VarvisClient:
         data = model.model_dump()
         return self._send_request(method, endpoint, handle_http_errors=handle_http_errors, json=data)
 
+    def _recover_session(self, state: _SessionState) -> _SessionState:
+        """
+        Share one bounded re-login sequence among requests using the same session.
+
+        One worker performs up to ``backoff_max_tries`` login attempts. Other workers
+        wait for that session's recovery future and receive its result or failure,
+        including workers whose forced-logout responses arrive after recovery finishes.
+        """
+        # elect one recovery owner while keeping the outcome attached to the old session
+        with self._recovery_lock:
+            owner = not state.recovery.running() and not state.recovery.done()
+            if owner:
+                state.recovery.set_running_or_notify_cancel()
+
+        if not owner:
+            # the future waits without holding the session lock needed by the login owner
+            return state.recovery.result()
+
+        # keep the entire login retry budget independent of the number of request workers
+        try:
+            last_error: Exception | None = None
+            for attempt in range(1, self.backoff_max_tries + 1):
+                try:
+                    with self._session_lock:
+                        if self.login(raise_for_status=False):
+                            recovered = self._session_state
+                            if recovered is None:
+                                raise RuntimeError("Login succeeded without initializing session state")
+                            state.recovery.set_result(recovered)
+                            return recovered
+                except (requests.RequestException, VarvisError) as exc:
+                    last_error = exc
+
+                # release the session lock between attempts so other requests can join recovery
+                if attempt < self.backoff_max_tries:
+                    wait_sec = 2 ** (attempt - 1) * self.backoff_factor_seconds
+                    self.logger.debug("Retrying shared login in %.1f seconds", wait_sec)
+                    time.sleep(wait_sec)
+
+            raise VarvisError(
+                f"Failed to reauthenticate with Varvis API after {self.backoff_max_tries} attempts"
+            ) from last_error
+        except BaseException as exc:
+            # always wake waiting workers, including when the recovery owner is interrupted
+            state.recovery.set_exception(exc)
+            raise
+
     def _send_request(
         self,
         method: str,
@@ -1797,7 +1952,14 @@ class VarvisClient:
 
         This method constructs the full API URL dynamically depending on the endpoint and
         manages session-based retries when needed. Certain API quirks, such as session
-        invalidations, are taken into account and handled appropriately.
+        invalidations, are taken into account and handled appropriately. Session acquisition
+        waits for login to finish, while requests run outside the session lock. Forced logout
+        responses invalidate only the session used for that request. Concurrent requests
+        share one bounded re-login sequence and its success or failure. A later request
+        may start fresh recovery after a failed sequence. The first request requires an
+        explicit login, and disabled retries do not initiate recovery.
+        Request retry delays use full jitter, chosen uniformly between zero and
+        ``backoff_factor_seconds * 2 ** (retry_number - 1)``.
 
         :param method: HTTP method to use for the request (e.g., "GET", "POST"). Type should match a valid HTTP method string.
         :param endpoint: Partial URL to append to the API base URL. Determines the specific endpoint being addressed.
@@ -1812,8 +1974,34 @@ class VarvisClient:
         :return: HTTP response object from the `requests` library containing the server's response.
         """
 
-        if self._session is None:
-            raise VarvisError("Session not initialized -- you need to login first")
+        # join the current recovery group before waiting for any in-progress login I/O
+        is_login = endpoint.removeprefix("/") == "login"
+        with self._recovery_lock:
+            session_state = self._session_state
+            if not is_login and session_state is not None and session_state.recovery.done():
+                # a new request gets a fresh budget while older requests retain the failed outcome
+                session_state = _SessionState(session_state.session)
+                self._session_state = session_state
+
+        if not is_login and session_state is not None and session_state.recovery.running():
+            # wait outside both locks so workers arriving during the last login share its outcome
+            session_state = self._recover_session(session_state)
+
+        # capture an authenticated session, including when the initial explicit login just finished
+        with self._session_lock:
+            if session_state is None:
+                with self._recovery_lock:
+                    session_state = self._session_state
+            request_session = self._session if is_login or session_state is None else session_state.session
+            if request_session is None and session_state is None:
+                raise VarvisError("Session not initialized -- you need to login first")
+            needs_recovery = not is_login and not self.logged_in
+
+        if needs_recovery and allow_retries and session_state is not None:
+            session_state = self._recover_session(session_state)
+            request_session = session_state.session
+        elif needs_recovery:
+            raise VarvisError("Session not authenticated -- you need to login first")
 
         endpoint = endpoint.removeprefix("/")
 
@@ -1857,24 +2045,20 @@ class VarvisClient:
             )
 
             retry = False  # reset on each try
-            send_request = True
 
-            if not self._session:  # re-login was requested on previous try
-                self.logger.debug("Attempting re-login after failed request")
+            # join recovery already started by another worker before sending another request
+            if (
+                endpoint != "login"
+                and session_state is not None
+                and (session_state.recovery.running() or session_state.recovery.done())
+            ):
+                session_state = self._recover_session(session_state)
+                request_session = session_state.session
 
-                # try to login again; it uses`allow_retries=False`, as this would cause recursive retry loops
-                if self.login(raise_for_status=False):
-                    # successfully logged in -- we can continue with the actual request
-                    self.logger.debug("Re-login successful")
-                else:
-                    # we will have to try logging in again -- we will not send the actual request now
-                    self.logger.debug("Re-login failed")
-                    retry = True
-                    send_request = False
-
-            if send_request:
+            if request_session is not None:
+                # send the request using the current request session
                 try:
-                    resp = self._session.request(
+                    resp = request_session.request(
                         method,
                         request_url,
                         stream=stream,
@@ -1887,13 +2071,19 @@ class VarvisClient:
                     if resp.status_code == 302 and resp.headers.get("Location", "").removesuffix(
                         "/"
                     ) == self.api_url.removesuffix("/"):
-                        # Varvis API quirk: in case there are too many concurrent requests for the same session, the session
-                        # seems to be invalidated and the response is a redirect to the base URL; we need to login again after
-                        # waiting a bit
+                        # Varvis API quirk: in case there are too many concurrent requests for the same session, the
+                        # session seems to be invalidated and the response is a redirect to the base URL; we need to
+                        # login again after waiting a bit
                         self.logger.debug("Possible forced logout from API detected -- will try to login again")
                         retry = True
-                        self._reset_state_on_logout()
+                        # ignore stale redirects from a session that has already been replaced
+                        with self._session_lock:
+                            if self._session is request_session:
+                                self._loggedin_csrf = None
                         resp = None
+                        if allow_retries and n_tries < max_retries and session_state is not None:
+                            session_state = self._recover_session(session_state)
+                            request_session = session_state.session
                 except requests.ConnectTimeout as exc:
                     self.logger.debug("Connection timeout")
                     last_transport_error = exc
@@ -1916,7 +2106,9 @@ class VarvisClient:
                     retry = True
 
             if retry and n_tries < max_retries:
-                wait_sec = 2 ** (n_tries - 1) * self.backoff_factor_seconds
+                # spread request retries uniformly across the exponential backoff window
+                max_wait = 2 ** (n_tries - 1) * self.backoff_factor_seconds
+                wait_sec = random.uniform(0, max_wait)  # nosec B311
                 n_tries += 1
                 self.logger.debug("Retrying in %.1f seconds", wait_sec)
                 time.sleep(wait_sec)
@@ -1949,6 +2141,17 @@ class VarvisClient:
 
         return resp
 
-    def _reset_state_on_logout(self) -> None:
-        self._session = None
-        self._loggedin_csrf = None
+    def _reset_state_on_logout(self, clear_recovery: bool = True) -> None:
+        """
+        Clear authentication while holding the session lock.
+
+        :param clear_recovery: Whether to discard the shared recovery record. Failed
+            login attempts retain it so participating requests share the final outcome.
+        """
+        # serialize authentication state changes
+        with self._session_lock:
+            self._session = None
+            self._loggedin_csrf = None
+            if clear_recovery:
+                with self._recovery_lock:
+                    self._session_state = None

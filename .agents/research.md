@@ -96,6 +96,10 @@ Main configuration fields:
 - `backoff_factor_seconds`
 - `backoff_max_tries`
 - `download_chunk_size`
+- `download_pool_size` (default `0`, using the parallel download worker count)
+- `download_pool_max_size` (default `0`, using the parallel download worker count)
+- `download_max_retries` (default `2`, for the download HTTP adapter)
+- `download_backoff_factor_seconds` (default `0.5`, independent from API backoff)
 - `logger`
 
 Notable implementation details:
@@ -122,7 +126,25 @@ The client stores two internal pieces of state:
 - `_session`
 - `_loggedin_csrf`
 
-The `logged_in` property treats both as required for a valid session.
+The `logged_in` property reads both fields under the session lock and treats both as required for a valid session.
+
+A per-client reentrant lock serializes login, session acquisition, and authentication reset.
+Each successful login creates a `_SessionState` record containing the authenticated session
+and a `concurrent.futures.Future` for its shared recovery outcome. Requests capture this record
+before network I/O and retain it even if the client's current session changes. Session identity
+prevents delayed forced-logout responses from clearing a replacement session, without a
+generation counter.
+
+One recovery owner performs up to `backoff_max_tries` login attempts for an invalidated session.
+The login budget is shared across all affected workers and is separate from each API request's
+HTTP attempt budget. A separate recovery lock registers participating requests without waiting
+for login I/O under the authentication lock. Waiting workers use the future's condition
+synchronization without holding either client lock. Failed login attempts clear incomplete authentication while retaining the
+shared recovery record. Backoff sleeps release the session lock so new requests can join active
+recovery. Success publishes a replacement session record; exhaustion or an unexpected exception
+publishes the same failure to all affected workers, including delayed old-session responses.
+A later API request may create a new recovery record after a failed sequence. Explicit initial
+login remains required, and requests with retries disabled do not initiate automatic recovery.
 
 `logout()` clears both pieces of local authentication state in a `finally` block, including when the remote logout request fails. This prevents a failed logout request from leaving the client looking authenticated locally.
 
@@ -138,6 +160,7 @@ Responsibilities of `_send_request()`:
 - send the request through the shared `requests.Session`
 - disable redirects
 - retry on connection/timeouts while preserving the final transport exception as the cause of a typed error
+- spread request retries after transport failures or forced logouts with full jitter: each delay is uniformly chosen between zero and `backoff_factor_seconds * 2 ** (retry_number - 1)`, with zero disabling delays; shared session recovery retains deterministic exponential backoff
 - detect a forced logout pattern and re-login
 - map selected HTTP statuses into `VarvisError`
 - otherwise optionally call `raise_for_status()`
@@ -223,10 +246,10 @@ The client detects exactly that pattern in `_send_request()`:
 
 When it sees it, it:
 
-- clears the session state
-- treats it as retryable
-- waits with exponential backoff
-- attempts to re-login before retrying the original request
+- invalidates authentication only if the response belongs to the current session
+- joins or starts that session's shared recovery sequence when a request retry is available
+- applies exponential backoff between the recovery owner's bounded login attempts
+- retries the original request through the authenticated replacement session
 
 That behavior is also explicitly tested in `tests/test_varvis_internal.py`.
 
@@ -277,8 +300,10 @@ That consistency makes the library easy to extend.
 The client can be fully initialized from environment variables:
 
 - required: `VARVIS_URL`, `VARVIS_USER`, `VARVIS_PASSWORD`
-- optional: `HTTPS_PROXY`, `VARVIS_SSL_VERIFY`, `VARVIS_CONNECTION_TIMEOUT`, `VARVIS_CONNECT_TIMEOUT`, `VARVIS_READ_TIMEOUT`, `VARVIS_BACKOFF_FACTOR_SECONDS`, `VARVIS_BACKOFF_MAX_TRIES`
+- optional: `HTTPS_PROXY`, `VARVIS_SSL_VERIFY`, `VARVIS_CONNECTION_TIMEOUT`, `VARVIS_CONNECT_TIMEOUT`, `VARVIS_READ_TIMEOUT`, `VARVIS_BACKOFF_FACTOR_SECONDS`, `VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS`, `VARVIS_BACKOFF_MAX_TRIES`
 
+Download settings include `VARVIS_DOWNLOAD_CHUNK_SIZE`, `VARVIS_DOWNLOAD_POOL_SIZE`,
+`VARVIS_DOWNLOAD_POOL_MAX_SIZE`, and `VARVIS_DOWNLOAD_MAX_RETRIES`, all parsed as integers.
 Type conversion is handled manually, including string-to-bool conversion for `ssl_verify`.
 
 The CLI also accepts a `--password` argument for constrained workflows. Its help text warns that command-line passwords may be visible in process listings and shell history, and CLI startup emits the same warning when the argument is explicitly used. The environment variable `VARVIS_PASSWORD` and interactive prompt avoid placing the password directly in the process argument list.
@@ -539,11 +564,31 @@ Download filenames are validated as single path components on both POSIX and Win
 
 ### Parallel download execution
 
-`download_files_from_urls_parallel()` uses `ThreadPoolExecutor`.
+`download_files_from_urls_parallel()` uses `ThreadPoolExecutor` and a shared `requests.Session`.
+The session mounts an HTTP adapter whose cached pool count and retained connections per pool
+use `download_pool_size` and `download_pool_max_size`; zero selects the worker count. The
+session context encloses the executor so workers finish before pooled connections are closed.
+
+`_DownloadRetry` extends urllib3's retry policy with full jitter before every retry, including
+the first. The default `download_max_retries=2` allows three attempts in total. Delay bounds
+are `download_backoff_factor_seconds * 2 ** (retry_number - 1)`, capped by urllib3's maximum backoff,
+so the default retry delays are uniformly distributed over 0–0.5 seconds and 0–1 second.
+Download backoff is independent from API request and session recovery backoff. It can be set
+through the constructor, `VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS`, or the CLI option
+`--download-backoff-factor-seconds`; zero disables delays and negative values are rejected.
+Only request-level failures handled by the adapter are retried; interrupted streamed bodies
+are cleaned up without restarting the download.
+
+The CLI exposes download chunk size, pool sizes, and retry limits as global options. Both
+the CLI and `from_env()` read `VARVIS_DOWNLOAD_CHUNK_SIZE`, `VARVIS_DOWNLOAD_POOL_SIZE`,
+`VARVIS_DOWNLOAD_POOL_MAX_SIZE`, and `VARVIS_DOWNLOAD_MAX_RETRIES`, retaining constructor
+defaults when unset and rejecting malformed integers. The CLI's API backoff option is
+`--backoff-factor-seconds`. The usage guides document pooled download lifetimes, separate
+retry budgets, and the distinction between request jitter and deterministic shared login recovery.
 
 For each download:
 
-- it performs a plain `requests.get(..., stream=True, timeout=...)`
+- it performs `session.get(..., stream=True, timeout=...)` through the shared pooled adapter
 - it accepts only URLs with an HTTPS scheme and network location
 - checks status code
 - reads `Content-Length` for identity-encoded responses and verifies the final byte count when the header is valid
@@ -617,6 +662,11 @@ The repository has a strong test surface.
 
 The project uses `requests-mock` fixtures rather than hitting the real API in most tests. Shared login mocks live in `tests/_common.py`.
 
+Download retry tests replace urllib3's wire request method while exercising the actual
+session, mounted adapter, and retry policy. Controlled jitter draws and intercepted sleeps
+verify attempt limits, exponential delay windows, disabled backoff, and eventual success or
+failure without network traffic or real retry delays.
+
 The tests also use:
 
 - `polyfactory` for generating model instances
@@ -631,6 +681,20 @@ The strongest tests are arguably the internal ones around `_send_request()`:
 - timeout retry failure
 - retry success after transient failure
 - forced logout via `302` redirect to base URL followed by re-login
+- independent locks for separate clients
+- login, requests, status reads, and authentication resets waiting for an in-progress login
+- concurrent forced logouts sharing a single replacement session
+- concurrent forced logouts sharing one login retry budget and failure after rejected credentials or transport errors
+- unexpected recovery errors waking all waiting workers
+- requests joining shared recovery during backoff or the final login attempt and receiving its success or failure
+- later API requests starting fresh recovery after failure while delayed old requests retain their original failure
+- delayed redirects from an old session preserving a successfully authenticated replacement
+- failed authentication clearing incomplete state and releasing the lock for another thread
+
+The concurrency tests use real worker threads with events and barriers to control ordering.
+An observed reentrant lock exposes acquisition attempts so waiting assertions do not depend on
+sleep intervals. Transport calls are mocked, synchronization waits are bounded, and worker
+results propagate failures to the test thread.
 
 Those cover the most fragile integration behavior.
 
