@@ -1986,6 +1986,8 @@ class VarvisClient:
         share one bounded re-login sequence and its success or failure. A later request
         may start fresh recovery after a failed sequence. The first request requires an
         explicit login, and disabled retries do not initiate recovery.
+        Request retry delays use full jitter, chosen uniformly between zero and
+        ``backoff_factor_seconds * 2 ** (retry_number - 1)``.
 
         Before sending, delayed workers follow successive recovery outcomes until reaching
         a session without known recovery, without consuming HTTP attempts.
@@ -2146,7 +2148,9 @@ class VarvisClient:
                     retry = True
 
             if retry and n_tries < max_retries:
-                wait_sec = 2 ** (n_tries - 1) * self.backoff_factor_seconds
+                # spread request retries uniformly across the exponential backoff window
+                max_wait = 2 ** (n_tries - 1) * self.backoff_factor_seconds
+                wait_sec = random.uniform(0, max_wait)  # nosec B311
                 n_tries += 1
                 self.logger.debug("Retrying in %.1f seconds", wait_sec)
                 time.sleep(wait_sec)
