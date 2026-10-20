@@ -721,6 +721,60 @@ def test_send_request_conn_or_timeout_error_retry_failure(
     assert isinstance(exc_info.value.__cause__, exception)
 
 
+@pytest.mark.parametrize(
+    "failure", [requests.ConnectionError, requests.Timeout, requests.ConnectTimeout, requests.ReadTimeout, "logout"]
+)
+@pytest.mark.parametrize("backoff_factor", [0.5, 0])
+@pytest.mark.parametrize(
+    "failures, allow_retries, max_tries", [(0, True, 3), (2, True, 3), (3, True, 3), (2, False, 3), (2, True, 1)]
+)
+def test_send_request_retry_jitter(
+    varvis_mockapi_with_login,
+    varvis_with_dbg_log,
+    monkeypatch,
+    failure,
+    backoff_factor,
+    failures,
+    allow_retries,
+    max_tries,
+):
+    """Apply full jitter to transport and forced-logout retries within the request budget."""
+    # return failures followed by success while letting forced logouts reauthenticate normally
+    client = varvis_with_dbg_log
+    client.backoff_factor_seconds = backoff_factor
+    client.backoff_max_tries = max_tries
+    failed_response = (
+        {"status_code": 302, "headers": {"Location": MOCK_URL}} if failure == "logout" else {"exc": failure}
+    )
+    varvis_mockapi_with_login.get(
+        MOCK_URL + "api/test", [failed_response] * failures + [{"json": {"message": "success"}}]
+    )
+
+    # control the random draws and capture delays without actually sleeping
+    delays = [0.25 * backoff_factor, 1.5 * backoff_factor]
+    jitter = mock.Mock(side_effect=delays)
+    sleep = mock.Mock()
+    monkeypatch.setattr("varvis_connector._varvis_client.random.uniform", jitter)
+    monkeypatch.setattr("varvis_connector._varvis_client.time.sleep", sleep)
+
+    # preserve success and exhaustion behavior with or without retries
+    attempts = max_tries if allow_retries else 1
+    if failures < attempts:
+        assert client._send_request("GET", "test", allow_retries=allow_retries).json() == {"message": "success"}
+    else:
+        with pytest.raises(VarvisError):
+            client._send_request("GET", "test", allow_retries=allow_retries)
+
+    # draw once per actual retry with a doubled window and never wait after the last attempt
+    retries = min(failures, attempts - 1)
+    assert jitter.call_args_list == [mock.call(0, backoff_factor * 2**i) for i in range(retries)]
+    assert sleep.call_args_list == [mock.call(delay) for delay in delays[:retries]]
+    assert (
+        sum(request.url == MOCK_URL + "api/test" for request in varvis_mockapi_with_login.request_history)
+        == retries + 1
+    )
+
+
 def test_send_request_without_retries_preserves_transport_cause(varvis_mockapi_with_login, varvis_with_dbg_log):
     """Do not retry or lose a transport failure when retries are disabled."""
     # make the authenticated request fail immediately

@@ -173,6 +173,7 @@ Responsibilities of `_send_request()`:
 - send the request through the shared `requests.Session`
 - disable redirects
 - retry on connection/timeouts while preserving the final transport exception as the cause of a typed error
+- spread request retries after transport failures or forced logouts with full jitter: each delay is uniformly chosen between zero and `backoff_factor_seconds * 2 ** (retry_number - 1)`, with zero disabling delays; shared session recovery retains deterministic exponential backoff
 - detect a forced logout pattern and re-login
 - map selected HTTP statuses into `VarvisError`
 - otherwise optionally call `raise_for_status()`
