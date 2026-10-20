@@ -213,6 +213,20 @@ Rate limiting
 
 The documentation says nothing about rate limiting. There is also no rate limit or retry information shared in the headers. However, when sending concurrent requests, the API may suddenly answer with an HTTP 302 redirect response (again, without any rate limit / retry information in the header) that leads to a visually empty, but still 50kB large HTML instead of a JSON object. The login session then seems to be invalidated and subsequent requests receive an HTTP 403 error, hence a new login must be attempted before continuing.
 
+The client recognizes a 302 redirect to the base API URL as a forced logout. Authentication
+state and login operations are protected by a per-client reentrant lock; request network
+I/O runs outside that lock. Requests using an invalidated session share one bounded recovery
+sequence and its result or failure. Delayed redirects from an old session cannot invalidate
+its replacement. Each recovery sequence has up to ``backoff_max_tries`` login attempts,
+independent of each request's attempt budget.
+
+API request retries after connection errors, timeouts, or forced logouts use full jitter:
+each delay is chosen uniformly between zero and
+``backoff_factor_seconds * 2 ** (retry_number - 1)``. Shared login recovery uses deterministic
+exponential backoff because only one worker performs the login attempts. Parallel downloads
+use a separate pooled session, retry budget, and jitter factor; see the API usage guide's
+Downloading Files section.
+
 Login error handling
 ^^^^^^^^^^^^^^^^^^^^
 
