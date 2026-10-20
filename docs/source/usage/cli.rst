@@ -27,8 +27,12 @@ These options apply to all commands:
 * ``--connection-timeout SECONDS``: Legacy HTTP timeout in seconds for both connection and response reads. If not provided, the value from the ``VARVIS_CONNECTION_TIMEOUT`` environment variable will be used. Default is 10 seconds.
 * ``--connect-timeout SECONDS``: Optional connection timeout in seconds. If not provided, the value from the ``VARVIS_CONNECT_TIMEOUT`` environment variable will be used.
 * ``--read-timeout SECONDS``: Optional response-read timeout in seconds. If not provided, the value from the ``VARVIS_READ_TIMEOUT`` environment variable will be used.
-* ``--backoff-factor SECONDS``: Backoff factor for API retries in seconds. If not provided, the value from the ``VARVIS_BACKOFF_FACTOR_SECONDS`` environment variable will be used. Default is 0.5 seconds.
-* ``--backoff-max-tries TRIES``: Maximum number of API tries. If not provided, the value from the ``VARVIS_BACKOFF_MAX_TRIES`` environment variable will be used. Default is 5.
+* ``--backoff-factor-seconds SECONDS``: Backoff factor for API request and session recovery retries. Request delays use full jitter; shared session recovery uses deterministic exponential backoff. If not provided, ``VARVIS_BACKOFF_FACTOR_SECONDS`` is used. Default is 0.5 seconds; zero disables delays.
+* ``--backoff-max-tries TRIES``: Maximum attempts per API request and per shared session recovery, with separate budgets. If not provided, ``VARVIS_BACKOFF_MAX_TRIES`` is used. Default is 5.
+* ``--download-pool-size SIZE``: Number of cached download connection pools. If not provided, ``VARVIS_DOWNLOAD_POOL_SIZE`` is used. Default is 0, which uses the parallel download worker count.
+* ``--download-pool-max-size SIZE``: Maximum connections retained per download pool. If not provided, ``VARVIS_DOWNLOAD_POOL_MAX_SIZE`` is used. Default is 0, which uses the parallel download worker count.
+* ``--download-max-retries RETRIES``: Maximum HTTP adapter retries per download request. If not provided, ``VARVIS_DOWNLOAD_MAX_RETRIES`` is used. Default is 2, allowing three attempts in total. Failures while streaming the response body are not retried.
+* ``--download-backoff-factor-seconds SECONDS``: Independent download retry backoff factor with full jitter. If not provided, ``VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS`` is used. Default is 0.5 seconds; zero disables delays.
 * ``--verbose``: Enable verbose output.
 * ``--help``: Show help message and exit.
 
