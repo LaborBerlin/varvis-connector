@@ -15,14 +15,13 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 """
 
 from collections import Counter
-import concurrent.futures
 import logging
 import os
 import random
 import tempfile
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, Future, as_completed
 from dataclasses import dataclass, field
 from json import JSONDecodeError
 from pathlib import Path
@@ -215,7 +214,7 @@ class _SessionState:
 
     session: requests.Session
     logout_generation: int
-    recovery: concurrent.futures.Future["_SessionState"] = field(default_factory=concurrent.futures.Future)
+    recovery: Future["_SessionState"] = field(default_factory=Future)
 
 
 @dataclass
@@ -1787,7 +1786,7 @@ class VarvisClient:
                     # iterate through completed tasks (order is random)
                     collected_messages = []  # for deferring messages when using progress bars
                     downloaded_files = {}
-                    for fut in concurrent.futures.as_completed(futures):
+                    for fut in as_completed(futures):
                         url, download_num = futures[fut]
                         downloaded_target_path = Path(urls_and_targets[url])
                         file_name = downloaded_target_path.name
