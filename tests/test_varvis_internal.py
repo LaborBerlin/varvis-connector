@@ -15,6 +15,8 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 """
 
 import logging
+import threading
+from concurrent.futures import Future, ThreadPoolExecutor
 from unittest import mock
 
 import pytest
@@ -31,10 +33,402 @@ from ._common import (
 
 
 @pytest.fixture
-def varvis_with_dbg_log():
+def varvis_with_dbg_log(varvis_mockapi_with_login):
+    """Create a logged-in debug client after its HTTP mocks are installed."""
+    # authenticate against the endpoints provided by the prerequisite fixture
     v = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=default_logger(logging.DEBUG))
     assert v.login()
     return v
+
+
+class _ObservedRLock:
+    """Expose acquisition attempts while retaining real reentrant locking."""
+
+    def __init__(self):
+        """Create an independent lock and an acquisition notification."""
+        self.lock = threading.RLock()
+        self.attempted = threading.Event()
+
+    def __enter__(self):
+        """Notify the test before waiting for the underlying lock."""
+        # signal before acquisition so the test can detect a blocked worker
+        self.attempted.set()
+        self.lock.acquire()
+
+    def __exit__(self, *_exc):
+        """Release the underlying lock after the protected operation."""
+        self.lock.release()
+
+
+def test_session_locks_are_independent():
+    """Give separate clients independent session locks."""
+    # avoid serializing authentication across unrelated clients
+    first = VarvisClient(MOCK_URL, "first", "password")
+    second = VarvisClient(MOCK_URL, "second", "password")
+    assert first._session_lock is not second._session_lock
+
+
+@pytest.mark.parametrize("peer_operation", ["login", "request", "logged_in", "reset"])
+def test_session_operations_wait_for_login(varvis_mockapi_with_login, monkeypatch, peer_operation):
+    """Wait for authentication before reading, using, or resetting session state."""
+    # pause the initial login while its session is still unauthenticated
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+    lock = _ObservedRLock()
+    monkeypatch.setattr(client, "_session_lock", lock)
+    login_started = threading.Event()
+    finish_login = threading.Event()
+    original_head = requests.Session.head
+
+    def paused_head(session, *args, **kwargs):
+        """Hold authentication open until the peer attempts to acquire its lock."""
+        # login already holds the session lock but has not received cookies or a CSRF token
+        login_started.set()
+        assert finish_login.wait(timeout=5)
+        return original_head(session, *args, **kwargs)
+
+    monkeypatch.setattr(requests.Session, "head", paused_head)
+    varvis_mockapi_with_login.get(MOCK_URL + "api/test", json={"message": "success"})
+
+    # the peer is a second worker using the same VarvisClient instance
+    # prove the peer reaches the lock and cannot observe an incomplete login
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        login = executor.submit(client.login)
+        try:
+            assert login_started.wait(timeout=5)
+            # discard notifications from the login thread before starting its peer
+            lock.attempted.clear()
+            if peer_operation == "login":
+                peer = executor.submit(client.login)
+            elif peer_operation == "request":
+                peer = executor.submit(client._send_request, "GET", "test")
+            elif peer_operation == "logged_in":
+                # evaluate the property inside the worker rather than in the submitting thread
+                peer = executor.submit(getattr, client, "logged_in")
+            else:
+                peer = executor.submit(client._reset_state_on_logout)
+            # establish that the peer is waiting on the lock without relying on a sleep
+            assert lock.attempted.wait(timeout=5)
+            assert not peer.done()
+            # the paused HEAD and the blocked peer must not have reached the transport
+            assert not varvis_mockapi_with_login.request_history
+        finally:
+            # unblock login even when an assertion fails so executor cleanup can finish
+            finish_login.set()
+        assert login.result(timeout=5) is True
+        result = peer.result(timeout=5)
+
+    # authenticate exactly once and expose only the completed session to peers
+    history = varvis_mockapi_with_login.request_history
+    assert sum(request.method == "HEAD" for request in history) == 1
+    assert sum(request.url == MOCK_URL + "login" for request in history) == 1
+    if peer_operation == "request":
+        # the waiting request must use the authenticated session's CSRF header
+        assert isinstance(result, requests.Response)
+        assert result.json() == {"message": "success"}
+        assert history[-1].headers["X-CSRF-TOKEN"] == "mock_csrf_post_login"
+    elif peer_operation == "reset":
+        # resetting after login must clear both pieces of authentication state
+        assert result is None
+        assert client._session is None
+        assert not client.logged_in
+    else:
+        # both the second login and the status read must see completed authentication
+        assert result is True
+
+
+def test_concurrent_forced_logouts_share_relogin(varvis_mockapi_with_login, varvis_with_dbg_log, monkeypatch):
+    """Recover concurrent forced logouts through one replacement session."""
+    # force every worker to send its first request through the same old session
+    client = varvis_with_dbg_log
+    client.backoff_factor_seconds = 0
+    workers = 4
+    requests_started = threading.Barrier(workers)  # worker threads wait until all reached requests_started.wait()
+    old_session = client._session
+
+    def forced_logout(*_args, **_kwargs):
+        """Return redirects only after all old-session requests are in flight."""
+        # prevent recovery from starting before every worker has captured the old session
+        requests_started.wait(timeout=5)
+        response = requests.Response()
+        response.status_code = 302
+        response.headers["Location"] = MOCK_URL
+        return response
+
+    # patch only the old session so replacement sessions use the successful mock endpoint
+    old_request = mock.Mock(side_effect=forced_logout)
+    monkeypatch.setattr(old_session, "request", old_request)
+    varvis_mockapi_with_login.get(MOCK_URL + "api/test", json={"message": "success"})
+
+    # allow request I/O to overlap and collect all worker exceptions in the main thread
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(client._send_request, "GET", "test") for _ in range(workers)]
+        responses = [future.result(timeout=5) for future in futures]
+
+    # reuse one authenticated replacement without discarding it for late redirects
+    assert [response.json() for response in responses] == [{"message": "success"}] * workers
+    assert old_request.call_count == workers
+    assert client._session is not old_session
+    assert client.logged_in
+    # include the fixture's initial login when counting the single reauthentication
+    history = varvis_mockapi_with_login.request_history
+    assert sum(request.method == "HEAD" for request in history) == 2
+    assert sum(request.url == MOCK_URL + "login" for request in history) == 2
+    assert sum(request.url == MOCK_URL + "api/test" for request in history) == workers
+
+
+@pytest.mark.parametrize("max_tries", [2, 3])
+@pytest.mark.parametrize("login_failure", ["rejected", "connection", "unexpected"])
+def test_concurrent_forced_logouts_exhaust_failed_relogin(
+    varvis_mockapi_with_login, varvis_with_dbg_log, monkeypatch, max_tries, login_failure
+):
+    """Share a single failed recovery budget and outcome across all request workers."""
+    # let all workers use the authenticated session before any redirect invalidates it
+    client = varvis_with_dbg_log
+    client.backoff_factor_seconds = 0
+    client.backoff_max_tries = max_tries
+    workers = 4
+    requests_started = threading.Barrier(workers)
+    old_session = client._session
+
+    def forced_logout(*_args, **_kwargs):
+        """Return a forced logout after every worker has an old-session request in flight."""
+        # prevent a fast worker from clearing authentication before the others send requests
+        requests_started.wait(timeout=5)
+        response = requests.Response()
+        response.status_code = 302
+        response.headers["Location"] = MOCK_URL
+        return response
+
+    # reject credentials or raise an error on every re-login attempt
+    old_request = mock.Mock(side_effect=forced_logout)
+    monkeypatch.setattr(old_session, "request", old_request)
+    if login_failure == "rejected":
+        varvis_mockapi_with_login.post(MOCK_URL + "login", headers={})
+    elif login_failure == "connection":
+        varvis_mockapi_with_login.post(MOCK_URL + "login", exc=requests.ConnectionError("login unavailable"))
+    else:
+        # programming errors must also release workers waiting for the recovery result
+        varvis_mockapi_with_login.post(MOCK_URL + "login", exc=RuntimeError("unexpected login failure"))
+
+    # require each worker to finish with the expected retry error rather than crash or hang
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = [executor.submit(client._send_request, "GET", "test") for _ in range(workers)]
+        failures = []
+        for future in futures:
+            if login_failure == "unexpected":
+                error = RuntimeError
+                message = "^unexpected login failure$"
+            else:
+                error = VarvisError
+                message = f"^Failed to reauthenticate with Varvis API after {max_tries} attempts$"
+            with pytest.raises(error, match=message) as exc_info:
+                future.result(timeout=5)
+            failures.append(exc_info.value)
+
+    # every worker must receive the recovery owner's failure without starting another cycle
+    assert all(failure is failures[0] for failure in failures)
+    if login_failure == "connection":
+        # login retains the typed transport error and its underlying requests exception
+        transport_error = failures[0].__cause__
+        assert isinstance(transport_error, VarvisTransportError)
+        assert isinstance(transport_error.__cause__, requests.ConnectionError)
+
+    # failed authentication must leave no partially initialized session or CSRF marker
+    assert old_request.call_count == workers
+    assert client._session is None
+    assert client._loggedin_csrf is None
+    assert not client.logged_in
+
+    # count one shared login budget plus the fixture's initial successful login
+    history = varvis_mockapi_with_login.request_history
+    expected_logins = 1 + (1 if login_failure == "unexpected" else max_tries)
+    assert sum(request.method == "HEAD" for request in history) == expected_logins
+    assert sum(request.url == MOCK_URL + "login" for request in history) == expected_logins
+    # no API request may be retried through an unauthenticated replacement session
+    assert not any(request.url == MOCK_URL + "api/test" for request in history)
+
+    # a later API request may start a fresh recovery cycle after the earlier group has failed
+    varvis_mockapi_with_login.post(MOCK_URL + "login", headers={"X-CSRF-TOKEN": "recovered"})
+    varvis_mockapi_with_login.get(MOCK_URL + "api/test", json={"message": "recovered"})
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assert executor.submit(client._send_request, "GET", "test").result(timeout=5).json() == {"message": "recovered"}
+    assert client.logged_in
+    assert sum(request.url == MOCK_URL + "login" for request in varvis_mockapi_with_login.request_history) == (
+        expected_logins + 1
+    )
+
+
+@pytest.mark.parametrize("recovery_succeeds", [True, False])
+@pytest.mark.parametrize("join_phase", ["backoff", "login"])
+def test_requests_join_active_recovery(
+    varvis_mockapi_with_login, varvis_with_dbg_log, monkeypatch, recovery_succeeds, join_phase
+):
+    """Share recovery with requests arriving during backoff or the final login attempt."""
+    # pause the recovery owner while two additional requests join its existing outcome
+    client = varvis_with_dbg_log
+    client.backoff_factor_seconds = 0
+    client.backoff_max_tries = 3
+    recovery_paused = threading.Event()
+    finish_recovery = threading.Event()
+    waiters_ready = threading.Barrier(3)
+    recovery = client._session_state.recovery
+    original_result = Future.result
+
+    def paused_backoff(_seconds):
+        """Keep recovery pending until new requests are waiting for its outcome."""
+        if join_phase == "backoff":
+            recovery_paused.set()
+            assert finish_recovery.wait(timeout=5)
+
+    def paused_login(_request, context):
+        """Hold the final login response open while new requests join recovery."""
+        # the login owner holds the authentication lock while waiting for this response
+        recovery_paused.set()
+        assert finish_recovery.wait(timeout=5)
+        if recovery_succeeds:
+            context.headers["X-CSRF-TOKEN"] = "recovered"
+        return ""
+
+    def observed_result(future, *args, **kwargs):
+        """Notify the main thread when a worker joins the shared recovery future."""
+        if future is recovery:
+            # only recovery waiters participate, not futures returned by the thread pool
+            waiters_ready.wait(timeout=5)
+        return original_result(future, *args, **kwargs)
+
+    monkeypatch.setattr("varvis_connector._varvis_client.time.sleep", paused_backoff)
+    monkeypatch.setattr(Future, "result", observed_result)
+    login_responses: list[dict[str, object]] = [{"headers": {}}]
+    if join_phase == "login":
+        # use the full budget so workers joining the final attempt cannot start another budget
+        login_responses.extend([{"headers": {}}, {"text": paused_login}])
+    elif recovery_succeeds:
+        login_responses.append({"headers": {"X-CSRF-TOKEN": "recovered"}})
+    varvis_mockapi_with_login.post(MOCK_URL + "login", login_responses)
+    varvis_mockapi_with_login.get(
+        MOCK_URL + "api/test",
+        [{"status_code": 302, "headers": {"Location": MOCK_URL}}, {"json": {"message": "success"}}],
+    )
+
+    # let requests enter while authentication is cleared but shared recovery is still active
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        owner = executor.submit(client._send_request, "GET", "test")
+        try:
+            assert recovery_paused.wait(timeout=5)
+            waiters = [executor.submit(client._send_request, "GET", "test") for _ in range(2)]
+            waiters_ready.wait(timeout=5)
+            assert not any(future.done() for future in [owner, *waiters])
+        finally:
+            # always release the owner so an assertion failure cannot strand the workers
+            finish_recovery.set()
+
+        for future in [owner, *waiters]:
+            if recovery_succeeds:
+                assert future.result(timeout=5).json() == {"message": "success"}
+            else:
+                with pytest.raises(VarvisError, match="Failed to reauthenticate with Varvis API after 3 attempts"):
+                    future.result(timeout=5)
+
+    # joining workers must add no login attempts of their own
+    expected_logins = 3 if recovery_succeeds and join_phase == "backoff" else 4
+    history = varvis_mockapi_with_login.request_history
+    assert sum(request.url == MOCK_URL + "login" for request in history) == expected_logins
+    assert client.logged_in is recovery_succeeds
+
+
+@pytest.mark.parametrize("first_recovery_fails", [False, True])
+def test_delayed_forced_logout_preserves_new_session(
+    varvis_mockapi_with_login, varvis_with_dbg_log, monkeypatch, first_recovery_fails
+):
+    """Preserve a newer session while late responses retain their original recovery outcome."""
+    # keep one old-session response pending while the other request recovers
+    client = varvis_with_dbg_log
+    client.backoff_factor_seconds = 0
+    client.backoff_max_tries = 2
+    requests_started = threading.Barrier(2)
+    release_delayed_response = threading.Event()
+    old_session = client._session
+
+    def forced_logout(_method, url, **_kwargs):
+        """Delay one redirect until the replacement session has served a request."""
+        # ensure both requests use the old session before either redirect can trigger recovery
+        requests_started.wait(timeout=5)
+        if url.endswith("delayed"):
+            # let the fast request finish its retry before returning this stale redirect
+            assert release_delayed_response.wait(timeout=5)
+        response = requests.Response()
+        response.status_code = 302
+        response.headers["Location"] = MOCK_URL
+        return response
+
+    monkeypatch.setattr(old_session, "request", forced_logout)
+    varvis_mockapi_with_login.get(MOCK_URL + "api/fast", json={"message": "fast"})
+    varvis_mockapi_with_login.get(MOCK_URL + "api/delayed", json={"message": "delayed"})
+    if first_recovery_fails:
+        varvis_mockapi_with_login.post(MOCK_URL + "login", headers={})
+
+    # complete reauthentication before permitting the stale redirect to arrive
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        fast = executor.submit(client._send_request, "GET", "fast")
+        delayed = executor.submit(client._send_request, "GET", "delayed")
+        try:
+            if first_recovery_fails:
+                # start a successful new cycle while a response from the failed group is pending
+                with pytest.raises(VarvisError, match="Failed to reauthenticate") as failed_recovery:
+                    fast.result(timeout=5)
+                varvis_mockapi_with_login.post(MOCK_URL + "login", headers={"X-CSRF-TOKEN": "recovered"})
+                assert client._send_request("GET", "fast").json() == {"message": "fast"}
+            else:
+                assert fast.result(timeout=5).json() == {"message": "fast"}
+            # remember the authenticated replacement before releasing the old response
+            replacement = client._session
+            assert replacement is not old_session
+            assert client.logged_in
+        finally:
+            # release the delayed worker on assertion failures as well as on success
+            release_delayed_response.set()
+        if first_recovery_fails:
+            # the old request retains its group's failure even after a newer cycle succeeds
+            with pytest.raises(VarvisError, match="Failed to reauthenticate") as delayed_failure:
+                delayed.result(timeout=5)
+            assert delayed_failure.value is failed_recovery.value
+        else:
+            # the delayed request must retry successfully through the existing replacement
+            assert delayed.result(timeout=5).json() == {"message": "delayed"}
+
+    # preserve the successful replacement without starting another cycle for the stale response
+    assert client._session is replacement
+    assert client.logged_in
+    history = varvis_mockapi_with_login.request_history
+    assert sum(request.url == MOCK_URL + "login" for request in history) == (4 if first_recovery_fails else 2)
+
+
+@pytest.mark.parametrize("failure_stage", ["head", "login"])
+def test_failed_login_releases_lock_and_clears_session(varvis_mockapi_with_login, failure_stage):
+    """Clear incomplete authentication and allow another thread to retry login."""
+    # fail either stage of authentication with an exception
+    client = VarvisClient(MOCK_URL, "mockuser", "mockpw")
+    if failure_stage == "head":
+        # simulate a transport failure before the initial CSRF token arrives
+        varvis_mockapi_with_login.head(MOCK_URL, exc=requests.ConnectionError("login connection failed"))
+        error = requests.ConnectionError
+    else:
+        # varvis signals rejected credentials by omitting the login response's CSRF token
+        varvis_mockapi_with_login.post(MOCK_URL + "login", headers={})
+        error = VarvisError
+    with pytest.raises(error):
+        client.login()
+    # exceptions must not leave a partially initialized session visible to another thread
+    assert client._session is None
+    assert client._loggedin_csrf is None
+    assert not client.logged_in
+
+    # retry on a different thread to prove the failed attempt released its lock
+    varvis_mockapi_with_login.head(MOCK_URL, headers={"X-CSRF-TOKEN": "initial"})
+    varvis_mockapi_with_login.post(MOCK_URL + "login", headers={"X-CSRF-TOKEN": "authenticated"})
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        assert executor.submit(client.login).result(timeout=5) is True
+    assert client.logged_in
 
 
 def test_send_request_ok(varvis_mockapi_with_login, varvis_with_dbg_log):
@@ -166,10 +560,29 @@ def test_send_request_retry_success(varvis_mockapi_with_login, varvis_with_dbg_l
     assert request_count["count"] == 2  # Verify that retry happened
 
 
-@pytest.mark.parametrize("n_failed_attempts", [1, 2, 3, 99])
+@pytest.mark.parametrize("allow_retries, max_tries", [(False, 3), (True, 1)])
+def test_forced_logout_respects_request_retry_limit(
+    varvis_mockapi_with_login, varvis_with_dbg_log, allow_retries, max_tries
+):
+    """Avoid starting recovery when the original request cannot be retried."""
+    # force a logout with either retries disabled or only one request attempt allowed
+    client = varvis_with_dbg_log
+    client.backoff_max_tries = max_tries
+    varvis_mockapi_with_login.get(MOCK_URL + "api/test", status_code=302, headers={"Location": MOCK_URL})
+
+    with pytest.raises(VarvisError, match="^Failed to send request to Varvis API after 1 attempts$"):
+        client._send_request("GET", "test", allow_retries=allow_retries)
+
+    # retain only the initial login and the failed API request in the transport history
+    history = varvis_mockapi_with_login.request_history
+    assert sum(request.url == MOCK_URL + "login" for request in history) == 1
+    assert sum(request.url == MOCK_URL + "api/test" for request in history) == 1
+    assert not client.logged_in
+
+
+@pytest.mark.parametrize("n_failed_attempts", [1, 2, 3, 5, 99])
 def test_send_request_handles_forced_logout(varvis_mockapi_with_login, varvis_with_dbg_log, n_failed_attempts):
-    """Test that _send_request method correctly handles a forced logout (302 redirect to base URL)
-    and successfully retries with re-login."""
+    """Recover after a forced logout within the shared login budget, or report its exhaustion."""
     # Set up the client to retry
     varvis_with_dbg_log.backoff_max_tries = 5
     varvis_with_dbg_log.backoff_factor_seconds = 0
@@ -214,7 +627,7 @@ def test_send_request_handles_forced_logout(varvis_mockapi_with_login, varvis_wi
     varvis_mockapi_with_login.get(test_url, json=redirect_endpoint_callback)
     varvis_mockapi_with_login.post(login_url, json=login_endpoint_callback)
 
-    if n_failed_attempts < varvis_with_dbg_log.backoff_max_tries:
+    if n_failed_attempts <= varvis_with_dbg_log.backoff_max_tries:
         # Request should initially get a 302 redirect, then trigger re-login, and finally succeed
         resp = varvis_with_dbg_log._send_request("GET", "test")
 
@@ -225,6 +638,6 @@ def test_send_request_handles_forced_logout(varvis_mockapi_with_login, varvis_wi
     else:
         with pytest.raises(
             VarvisError,
-            match=f"Failed to send request to Varvis API after {varvis_with_dbg_log.backoff_max_tries} attempts",
+            match=f"Failed to reauthenticate with Varvis API after {varvis_with_dbg_log.backoff_max_tries} attempts",
         ):
             varvis_with_dbg_log._send_request("GET", "test")

@@ -122,7 +122,25 @@ The client stores two internal pieces of state:
 - `_session`
 - `_loggedin_csrf`
 
-The `logged_in` property treats both as required for a valid session.
+The `logged_in` property reads both fields under the session lock and treats both as required for a valid session.
+
+A per-client reentrant lock serializes login, session acquisition, and authentication reset.
+Each successful login creates a `_SessionState` record containing the authenticated session
+and a `concurrent.futures.Future` for its shared recovery outcome. Requests capture this record
+before network I/O and retain it even if the client's current session changes. Session identity
+prevents delayed forced-logout responses from clearing a replacement session, without a
+generation counter.
+
+One recovery owner performs up to `backoff_max_tries` login attempts for an invalidated session.
+The login budget is shared across all affected workers and is separate from each API request's
+HTTP attempt budget. A separate recovery lock registers participating requests without waiting
+for login I/O under the authentication lock. Waiting workers use the future's condition
+synchronization without holding either client lock. Failed login attempts clear incomplete authentication while retaining the
+shared recovery record. Backoff sleeps release the session lock so new requests can join active
+recovery. Success publishes a replacement session record; exhaustion or an unexpected exception
+publishes the same failure to all affected workers, including delayed old-session responses.
+A later API request may create a new recovery record after a failed sequence. Explicit initial
+login remains required, and requests with retries disabled do not initiate automatic recovery.
 
 `logout()` clears both pieces of local authentication state in a `finally` block, including when the remote logout request fails. This prevents a failed logout request from leaving the client looking authenticated locally.
 
@@ -223,10 +241,10 @@ The client detects exactly that pattern in `_send_request()`:
 
 When it sees it, it:
 
-- clears the session state
-- treats it as retryable
-- waits with exponential backoff
-- attempts to re-login before retrying the original request
+- invalidates authentication only if the response belongs to the current session
+- joins or starts that session's shared recovery sequence when a request retry is available
+- applies exponential backoff between the recovery owner's bounded login attempts
+- retries the original request through the authenticated replacement session
 
 That behavior is also explicitly tested in `tests/test_varvis_internal.py`.
 
@@ -631,6 +649,20 @@ The strongest tests are arguably the internal ones around `_send_request()`:
 - timeout retry failure
 - retry success after transient failure
 - forced logout via `302` redirect to base URL followed by re-login
+- independent locks for separate clients
+- login, requests, status reads, and authentication resets waiting for an in-progress login
+- concurrent forced logouts sharing a single replacement session
+- concurrent forced logouts sharing one login retry budget and failure after rejected credentials or transport errors
+- unexpected recovery errors waking all waiting workers
+- requests joining shared recovery during backoff or the final login attempt and receiving its success or failure
+- later API requests starting fresh recovery after failure while delayed old requests retain their original failure
+- delayed redirects from an old session preserving a successfully authenticated replacement
+- failed authentication clearing incomplete state and releasing the lock for another thread
+
+The concurrency tests use real worker threads with events and barriers to control ordering.
+An observed reentrant lock exposes acquisition attempts so waiting assertions do not depend on
+sleep intervals. Transport calls are mocked, synchronization waits are bounded, and worker
+results propagate failures to the test thread.
 
 Those cover the most fragile integration behavior.
 
