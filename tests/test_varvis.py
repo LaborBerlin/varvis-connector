@@ -23,6 +23,7 @@ import threading
 import uuid
 from datetime import date
 from fnmatch import fnmatchcase
+from io import BytesIO
 from pathlib import Path
 from unittest import mock
 
@@ -30,6 +31,8 @@ import pytest
 import requests
 from polyfactory.factories.pydantic_factory import ModelFactory
 from requests import Response
+from urllib3.exceptions import ConnectTimeoutError
+from urllib3.response import HTTPResponse
 
 from ._common import (
     MOCK_URL,
@@ -187,6 +190,61 @@ def test_from_env(
     assert v.backoff_factor_seconds == backoff_factor_seconds
     assert v.backoff_max_tries == backoff_max_tries
     assert not v.logged_in
+
+
+@pytest.mark.parametrize(
+    "setting, default",
+    [
+        ("download_chunk_size", 5 * 1024 * 1024),
+        ("download_pool_size", 0),
+        ("download_pool_max_size", 0),
+        ("download_max_retries", 2),
+    ],
+)
+@pytest.mark.parametrize("value", [None, "0", "7", "invalid"])
+def test_from_env_download_integer_settings(monkeypatch_clean_env, setting, default, value):
+    """Read integer download settings, preserve defaults, and reject invalid integers."""
+    # provide credentials and isolate all integer download settings from the caller's environment
+    monkeypatch_clean_env.setenv("VARVIS_URL", MOCK_URL)
+    monkeypatch_clean_env.setenv("VARVIS_USER", "mockuser")
+    monkeypatch_clean_env.setenv("VARVIS_PASSWORD", "mockpw")
+    for name in ("CHUNK_SIZE", "POOL_SIZE", "POOL_MAX_SIZE", "MAX_RETRIES"):
+        monkeypatch_clean_env.delenv("VARVIS_DOWNLOAD_" + name, raising=False)
+    if value is not None:
+        monkeypatch_clean_env.setenv("VARVIS_" + setting.upper(), value)
+
+    # check numeric conversion and default retention or reject malformed input
+    if value == "invalid":
+        with pytest.raises(ValueError, match="invalid literal for int"):
+            VarvisClient.from_env()
+    else:
+        client = VarvisClient.from_env()
+        actual = getattr(client, setting)
+        assert actual == (default if value is None else int(value))
+        assert isinstance(actual, int)
+
+
+@pytest.mark.parametrize("download_factor", [None, "0", "1.25", "-1"])
+def test_from_env_download_backoff(monkeypatch_clean_env, download_factor):
+    """Configure and validate download backoff independently of API backoff."""
+    # isolate the download setting while giving API retries a different backoff factor
+    monkeypatch_clean_env.setenv("VARVIS_URL", MOCK_URL)
+    monkeypatch_clean_env.setenv("VARVIS_USER", "mockuser")
+    monkeypatch_clean_env.setenv("VARVIS_PASSWORD", "mockpw")
+    monkeypatch_clean_env.setenv("VARVIS_BACKOFF_FACTOR_SECONDS", "3")
+    if download_factor is None:
+        monkeypatch_clean_env.delenv("VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS", raising=False)
+    else:
+        monkeypatch_clean_env.setenv("VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS", download_factor)
+
+    # reject invalid settings and retain the independent default or configured download factor
+    if download_factor == "-1":
+        with pytest.raises(ValueError, match="download_backoff_factor_seconds must be a non-negative number"):
+            VarvisClient.from_env()
+    else:
+        client = VarvisClient.from_env()
+        assert client.download_backoff_factor_seconds == (0.5 if download_factor is None else float(download_factor))
+        assert client.backoff_factor_seconds == 3
 
 
 def test_varvis_fields_order_username_before_password():
@@ -1049,7 +1107,7 @@ def test_download_files_from_urls_parallel_rejects_non_https(monkeypatch, varvis
     def unexpected_request(*args, **kwargs):
         pytest.fail("Non-HTTPS URL should be rejected before making a request")
 
-    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", unexpected_request)
+    monkeypatch.setattr("varvis_connector._varvis_client.Session.get", unexpected_request)
 
     result = varvis.download_files_from_urls_parallel(
         {url: tmp_path / "file"},
@@ -1060,6 +1118,72 @@ def test_download_files_from_urls_parallel_rejects_non_https(monkeypatch, varvis
 
     assert result == {}
     assert not (tmp_path / "file").exists()
+
+
+@pytest.mark.parametrize("failures_before_success", [0, 1, 2, 3])
+@pytest.mark.parametrize("backoff_factor", [0.5, 0])
+def test_download_retries_use_exponential_backoff_with_jitter(
+    monkeypatch, tmp_path, failures_before_success, backoff_factor
+):
+    """Use independent download backoff with jitter and stop after two download retries."""
+    # bypass environment proxies and replace only wire I/O so urllib3 performs real retries
+    monkeypatch.setenv("NO_PROXY", "*")
+    attempts = []
+    payload = b"new data"
+
+    def make_request(pool, connection, method, url, **_kwargs):
+        """Fail connection attempts before returning a complete streamed response."""
+        attempts.append((method, url))
+        if len(attempts) <= failures_before_success:
+            raise ConnectTimeoutError("download connection timed out")
+        return HTTPResponse(
+            body=BytesIO(payload),
+            headers={"Content-Length": str(len(payload))},
+            status=200,
+            preload_content=False,
+            connection=connection,
+            pool=pool,
+        )
+
+    monkeypatch.setattr("urllib3.connectionpool.HTTPSConnectionPool._make_request", make_request)
+    # control jitter draws and record sleeps without waiting or depending on random values
+    jitter = mock.Mock(side_effect=[0.5 * backoff_factor, 1.5 * backoff_factor])
+    sleep = mock.Mock()
+    monkeypatch.setattr("varvis_connector._varvis_client.random.uniform", jitter)
+    monkeypatch.setattr("urllib3.util.retry.time.sleep", sleep)
+    # make API backoff differ so accidentally using it produces different retry windows
+    client = VarvisClient(
+        MOCK_URL,
+        "mockuser",
+        "mockpw",
+        backoff_factor_seconds=3,
+        download_backoff_factor_seconds=backoff_factor,
+    )
+    target_path = tmp_path / "sample.bam"
+
+    # exercise the actual session and adapter, including immutable retry policy cloning
+    result = client.download_files_from_urls_parallel(
+        {"https://mock-dl/sample.bam": target_path},
+        max_parallel_downloads=1,
+        show_progress_bar=False,
+        return_messages=False,
+    )
+
+    # allow one initial attempt and at most two retries, with no incomplete file on failure
+    assert len(attempts) == min(failures_before_success + 1, 3)
+    if failures_before_success < 3:
+        assert result == {"sample.bam": target_path}
+        assert target_path.read_bytes() == payload
+    else:
+        assert result == {}
+        assert not target_path.exists()
+    assert not list(tmp_path.glob("*.part"))
+
+    # increase the jitter window exponentially and skip sleeping when backoff is disabled
+    retry_count = min(failures_before_success, 2)
+    assert jitter.call_args_list == [mock.call(0, backoff_factor), mock.call(0, 2 * backoff_factor)][:retry_count]
+    expected_sleeps = [mock.call(0.5 * backoff_factor), mock.call(1.5 * backoff_factor)][:retry_count]
+    assert sleep.call_args_list == (expected_sleeps if backoff_factor else [])
 
 
 def test_check_download_files_for_path_collisions(tmp_path):
@@ -1160,7 +1284,7 @@ def test_download_files_from_urls_parallel_commits_atomically(
     response.ok = True
     response.headers = {"Content-Length": "8"}
     response.iter_content.side_effect = iter_content
-    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", mock.Mock(return_value=response))
+    monkeypatch.setattr("varvis_connector._varvis_client.Session.get", mock.Mock(return_value=response))
     varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
     caplog.clear()
 
@@ -1203,7 +1327,7 @@ def test_download_files_from_urls_parallel_cleans_up_after_stream_timeout(
     response.ok = True
     response.headers = {"Content-Length": "20"}
     response.iter_content.side_effect = iter_content
-    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", mock.Mock(return_value=response))
+    monkeypatch.setattr("varvis_connector._varvis_client.Session.get", mock.Mock(return_value=response))
     varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
     caplog.clear()
 
@@ -1256,7 +1380,7 @@ def test_download_files_from_urls_parallel_cleans_up_after_keyboard_interrupt(
     response.ok = True
     response.headers = {}
     response.iter_content.side_effect = iter_content
-    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", mock.Mock(return_value=response))
+    monkeypatch.setattr("varvis_connector._varvis_client.Session.get", mock.Mock(return_value=response))
     monkeypatch.setattr(
         "varvis_connector._varvis_client.concurrent.futures.as_completed",
         interrupt_when_download_started,
@@ -1287,7 +1411,7 @@ def test_download_files_from_urls_parallel_rejects_incomplete_content(monkeypatc
     response.ok = True
     response.headers = {"Content-Length": "20"}
     response.iter_content.return_value = [b"partial"]
-    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", mock.Mock(return_value=response))
+    monkeypatch.setattr("varvis_connector._varvis_client.Session.get", mock.Mock(return_value=response))
     varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
     caplog.clear()
     target_path = tmp_path / "sample.bam"
@@ -1316,7 +1440,7 @@ def test_download_files_from_urls_parallel_handles_request_timeout(monkeypatch, 
     """A timeout before receiving a response does not escape the worker."""
     # make the initial download request time out
     request = mock.Mock(side_effect=requests.Timeout("request timed out"))
-    monkeypatch.setattr("varvis_connector._varvis_client.requests.get", request)
+    monkeypatch.setattr("varvis_connector._varvis_client.Session.get", request)
     varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
     caplog.clear()
     target_path = tmp_path / "sample.bam"

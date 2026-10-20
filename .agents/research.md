@@ -96,6 +96,10 @@ Main configuration fields:
 - `backoff_factor_seconds`
 - `backoff_max_tries`
 - `download_chunk_size`
+- `download_pool_size` (default `0`, using the parallel download worker count)
+- `download_pool_max_size` (default `0`, using the parallel download worker count)
+- `download_max_retries` (default `2`, for the download HTTP adapter)
+- `download_backoff_factor_seconds` (default `0.5`, independent from API backoff)
 - `logger`
 
 Notable implementation details:
@@ -295,7 +299,7 @@ That consistency makes the library easy to extend.
 The client can be fully initialized from environment variables:
 
 - required: `VARVIS_URL`, `VARVIS_USER`, `VARVIS_PASSWORD`
-- optional: `HTTPS_PROXY`, `VARVIS_SSL_VERIFY`, `VARVIS_CONNECTION_TIMEOUT`, `VARVIS_CONNECT_TIMEOUT`, `VARVIS_READ_TIMEOUT`, `VARVIS_BACKOFF_FACTOR_SECONDS`, `VARVIS_BACKOFF_MAX_TRIES`
+- optional: `HTTPS_PROXY`, `VARVIS_SSL_VERIFY`, `VARVIS_CONNECTION_TIMEOUT`, `VARVIS_CONNECT_TIMEOUT`, `VARVIS_READ_TIMEOUT`, `VARVIS_BACKOFF_FACTOR_SECONDS`, `VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS`, `VARVIS_BACKOFF_MAX_TRIES`
 
 Type conversion is handled manually, including string-to-bool conversion for `ssl_verify`.
 
@@ -557,11 +561,24 @@ Download filenames are validated as single path components on both POSIX and Win
 
 ### Parallel download execution
 
-`download_files_from_urls_parallel()` uses `ThreadPoolExecutor`.
+`download_files_from_urls_parallel()` uses `ThreadPoolExecutor` and a shared `requests.Session`.
+The session mounts an HTTP adapter whose cached pool count and retained connections per pool
+use `download_pool_size` and `download_pool_max_size`; zero selects the worker count. The
+session context encloses the executor so workers finish before pooled connections are closed.
+
+`_DownloadRetry` extends urllib3's retry policy with full jitter before every retry, including
+the first. The default `download_max_retries=2` allows three attempts in total. Delay bounds
+are `download_backoff_factor_seconds * 2 ** (retry_number - 1)`, capped by urllib3's maximum backoff,
+so the default retry delays are uniformly distributed over 0–0.5 seconds and 0–1 second.
+Download backoff is independent from API request and session recovery backoff. It can be set
+through the constructor, `VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS`, or the CLI option
+`--download-backoff-factor-seconds`; zero disables delays and negative values are rejected.
+Only request-level failures handled by the adapter are retried; interrupted streamed bodies
+are cleaned up without restarting the download.
 
 For each download:
 
-- it performs a plain `requests.get(..., stream=True, timeout=...)`
+- it performs `session.get(..., stream=True, timeout=...)` through the shared pooled adapter
 - it accepts only URLs with an HTTPS scheme and network location
 - checks status code
 - reads `Content-Length` for identity-encoded responses and verifies the final byte count when the header is valid
@@ -634,6 +651,11 @@ The repository has a strong test surface.
 ### Mocking strategy
 
 The project uses `requests-mock` fixtures rather than hitting the real API in most tests. Shared login mocks live in `tests/_common.py`.
+
+Download retry tests replace urllib3's wire request method while exercising the actual
+session, mounted adapter, and retry policy. Controlled jitter draws and intercepted sleeps
+verify attempt limits, exponential delay windows, disabled backoff, and eventual success or
+failure without network traffic or real retry delays.
 
 The tests also use:
 

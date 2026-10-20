@@ -18,6 +18,7 @@ from collections import Counter
 import concurrent.futures
 import logging
 import os
+import random
 import tempfile
 import threading
 import time
@@ -32,8 +33,10 @@ from collections.abc import Collection, Iterator, Sequence
 
 import requests
 from pydantic import BaseModel, ValidationError
-from requests import Response
+from requests import Response, Session
+from requests.adapters import HTTPAdapter
 from tqdm import tqdm
+from urllib3.util.retry import Retry
 
 from ._log import default_logger
 from .errors import VarvisError, VarvisTimeoutError, VarvisTransportError
@@ -193,6 +196,19 @@ def _raise_varvis_error(error_data: dict[str, str | None], custom_error_msg: str
     )
 
 
+class _DownloadRetry(Retry):
+    """Apply exponential backoff with full jitter before each download retry."""
+
+    def get_backoff_time(self) -> float:
+        """Return a random delay bounded by the exponential wait for this retry."""
+        # the first retry uses the base factor, followed by a doubled delay on each retry
+        if not self.history:
+            return 0.0
+        max_wait = min(self.backoff_max, self.backoff_factor * 2 ** (len(self.history) - 1))
+        # non-cryptographic randomness is sufficient for spreading download retries
+        return random.uniform(0, max_wait)  # nosec B311
+
+
 @dataclass
 class _SessionState:
     """Associate an authenticated session with its shared recovery outcome."""
@@ -219,9 +235,14 @@ class VarvisClient:
     :ivar connection_timeout: Legacy timeout in seconds for both connection and response reads.
     :ivar connect_timeout: Optional connection timeout in seconds.
     :ivar read_timeout: Optional response-read timeout in seconds.
-    :ivar backoff_factor_seconds: Base factor for exponential backoff between retries.
+    :ivar backoff_factor_seconds: Base factor for API request backoff with full jitter and deterministic session
+        recovery backoff.
     :ivar backoff_max_tries: Maximum attempts per API request and per shared session recovery.
     :ivar download_chunk_size: Number of bytes read per chunk when downloading files.
+    :ivar download_pool_size: Number of cached download connection pools. Zero uses the parallel worker count.
+    :ivar download_pool_max_size: Maximum connections retained per download pool. Zero uses the parallel worker count.
+    :ivar download_max_retries: Maximum HTTP adapter retries per download request.
+    :ivar download_backoff_factor_seconds: Base factor for download retry backoff with full jitter.
     :ivar logger: Logger instance for recording operations and errors.
     :ivar _session: The HTTP session used for Varvis API communication,
         initialized during login and cleared during logout.
@@ -275,6 +296,22 @@ class VarvisClient:
         default=5 * 1024 * 1024,
         metadata={"help": "Chunk size in bytes for file downloads. Default is 5MB"},
     )
+    download_pool_size: int = field(
+        default=0,
+        metadata={"help": "Number of cached download connection pools. 0 uses the parallel download worker count"},
+    )
+    download_pool_max_size: int = field(
+        default=0,
+        metadata={"help": "Maximum connections retained per download pool. 0 uses the parallel download worker count"},
+    )
+    download_max_retries: int = field(
+        default=2,
+        metadata={"help": "Maximum HTTP adapter retries per download request. Default is 2"},
+    )
+    download_backoff_factor_seconds: float = field(
+        default=0.5,
+        metadata={"help": "Base factor in seconds for exponential download retry backoff with full jitter"},
+    )
     logger: logging.Logger = logging.Logger("not_initialized", -1)
     _session: requests.Session | None = None
     _session_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
@@ -283,7 +320,7 @@ class VarvisClient:
     _session_state: _SessionState | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Additional setup steps."""
+        """Normalize client settings and validate backoff and timeout limits."""
 
         if not self.api_url:
             raise ValueError("API URL must be provided")
@@ -307,6 +344,8 @@ class VarvisClient:
 
         if self.backoff_factor_seconds < 0:
             raise ValueError("backoff_factor_seconds must be a non-negative number")
+        if self.download_backoff_factor_seconds < 0:
+            raise ValueError("download_backoff_factor_seconds must be a non-negative number")
         if self.backoff_max_tries < 1:
             raise ValueError("backoff_max_tries must be a strictly positive integer")
 
@@ -338,6 +377,8 @@ class VarvisClient:
 
     @classmethod
     def from_env(cls) -> "VarvisClient":
+        """Create a client using authentication, timeout, retry, and download settings from the environment."""
+        # read credentials and convert optional environment settings to their constructor types
         url, username, password = [os.getenv("VARVIS_" + s, "") for s in ("URL", "USER", "PASSWORD")]
 
         kwargs = {}
@@ -348,14 +389,31 @@ class VarvisClient:
             "connect_timeout",
             "read_timeout",
             "backoff_factor_seconds",
+            "download_backoff_factor_seconds",
             "backoff_max_tries",
+            "download_chunk_size",
+            "download_pool_size",
+            "download_pool_max_size",
+            "download_max_retries",
         }:
             prefix = "VARVIS_" if key != "https_proxy" else ""
             value: Any = os.getenv(prefix + key.upper())
             if value is not None:
-                if key in {"connection_timeout", "connect_timeout", "read_timeout", "backoff_factor_seconds"}:
+                if key in {
+                    "connection_timeout",
+                    "connect_timeout",
+                    "read_timeout",
+                    "backoff_factor_seconds",
+                    "download_backoff_factor_seconds",
+                }:
                     value = float(value)
-                elif key == "backoff_max_tries":
+                elif key in {
+                    "backoff_max_tries",
+                    "download_chunk_size",
+                    "download_pool_size",
+                    "download_pool_max_size",
+                    "download_max_retries",
+                }:
                     value = int(value)
                 elif key == "ssl_verify":
                     value = value.lower() in {"true", "1"} if value else True
@@ -1502,6 +1560,9 @@ class VarvisClient:
         removed after failures or interruptions. When an uncompressed response declares a valid
         ``Content-Length``, its downloaded byte count is verified before the file is committed. Batches
         containing multiple URLs that resolve to the same target path are rejected before workers start.
+        Requests share a pooled session and retry transport failures up to ``download_max_retries``
+        times, with exponential backoff and full jitter based on ``download_backoff_factor_seconds``.
+        Interrupted response bodies are not retried.
 
         :param urls_and_targets: A dictionary where keys are URLs pointing to files to download and
             values are their respective output file paths where the downloaded files should be stored.
@@ -1517,6 +1578,7 @@ class VarvisClient:
         """
 
         def download_single_file(
+            sess: Session,
             url: str,
             output_file_path: Path,
             download_num: int,
@@ -1551,7 +1613,7 @@ class VarvisClient:
                 return False
 
             try:
-                resp = requests.get(url, stream=True, verify=ssl_verify, timeout=request_timeout)
+                resp = sess.get(url, stream=True, verify=ssl_verify, timeout=request_timeout)
             except requests.RequestException:
                 logger.exception(f"Download #{dl_num1}: Error on download request")
                 return False
@@ -1673,66 +1735,83 @@ class VarvisClient:
                 f"{collisions_str}"
             )
 
-        interruption_event = threading.Event()
-        with ThreadPoolExecutor(max_workers=max_parallel_downloads) as executor:
-            # enter try-block that catches program cancallation (ctrl-c) as KeyboardInterrupt exception
-            try:
-                # submit tasks ("futures") to threads
-                futures = {}  # maps Future objects to URLs
-                for i, (url, target_path) in enumerate(urls_and_targets.items()):
-                    fut = executor.submit(
-                        download_single_file,
-                        url,
-                        target_path,
-                        download_num=i,
-                        logger=self.logger,
-                        ssl_verify=self.ssl_verify,
-                        request_timeout=self.request_timeout,
-                        show_progress_bar=show_progress_bar,
-                        download_chunk_size=self.download_chunk_size,
-                        interrpt_event=interruption_event,
-                    )
-                    futures[fut] = (url, i)
+        # set up a connection pool
+        with Session() as sess:
+            sess_adapter = HTTPAdapter(
+                pool_connections=self.download_pool_size or max_parallel_downloads,
+                pool_maxsize=self.download_pool_max_size or max_parallel_downloads,
+                max_retries=_DownloadRetry(
+                    total=self.download_max_retries,
+                    backoff_factor=self.download_backoff_factor_seconds,
+                ),
+            )
+            sess.mount("http://", sess_adapter)
+            sess.mount("https://", sess_adapter)
 
-                # iterate through completed tasks (order is random)
-                collected_messages = []  # for deferring messages when using progress bars
-                downloaded_files = {}
-                for fut in concurrent.futures.as_completed(futures):
-                    url, download_num = futures[fut]
-                    downloaded_target_path = Path(urls_and_targets[url])
-                    file_name = downloaded_target_path.name
-                    try:
-                        success = fut.result()
-                    except Exception as exc:
-                        msg = f'Download #{download_num + 1}: Error while downloading file "{file_name}": {exc}'
-                        if show_progress_bar:
-                            collected_messages.append((logging.ERROR, msg))
-                        else:
-                            self.logger.error(msg)
-                    else:
-                        if success:
-                            downloaded_files[file_name] = downloaded_target_path
+            # download in parallel
+            interruption_event = threading.Event()
+            with ThreadPoolExecutor(max_workers=max_parallel_downloads) as executor:
+                # enter try-block that catches program cancallation (ctrl-c) as KeyboardInterrupt exception
+                try:
+                    # submit tasks ("futures") to threads
+                    futures = {}  # maps Future objects to URLs
+                    for i, (url, target_path) in enumerate(urls_and_targets.items()):
+                        fut = executor.submit(
+                            download_single_file,
+                            sess,
+                            url,
+                            target_path,
+                            download_num=i,
+                            logger=self.logger,
+                            ssl_verify=self.ssl_verify,
+                            request_timeout=self.request_timeout,
+                            show_progress_bar=show_progress_bar,
+                            download_chunk_size=self.download_chunk_size,
+                            interrpt_event=interruption_event,
+                        )
+                        futures[fut] = (url, i)
 
-                            msg = f'Download #{download_num + 1}: Successfully downloaded file "{file_name}"'
-                            if show_progress_bar:
-                                collected_messages.append((logging.INFO, msg))
-                            else:
-                                self.logger.info(msg)
-                        else:
-                            msg = f'Download #{download_num + 1}: Could not download file "{file_name}"'
+                    # iterate through completed tasks (order is random)
+                    collected_messages = []  # for deferring messages when using progress bars
+                    downloaded_files = {}
+                    for fut in concurrent.futures.as_completed(futures):
+                        url, download_num = futures[fut]
+                        downloaded_target_path = Path(urls_and_targets[url])
+                        file_name = downloaded_target_path.name
+                        try:
+                            success = fut.result()
+                        except Exception as exc:
+                            msg = f'Download #{download_num + 1}: Error while downloading file "{file_name}": {exc}'
                             if show_progress_bar:
                                 collected_messages.append((logging.ERROR, msg))
                             else:
                                 self.logger.error(msg)
-            except KeyboardInterrupt:
-                # download interrupted
-                interruption_event.set()
-                raise
+                        else:
+                            if success:
+                                downloaded_files[file_name] = downloaded_target_path
 
-            if show_progress_bar and not return_messages:
-                # log the collected messages after all downloads completed
-                for lvl, msg in collected_messages:
-                    self.logger.log(lvl, msg)
+                                msg = f'Download #{download_num + 1}: Successfully downloaded file "{file_name}"'
+                                if show_progress_bar:
+                                    collected_messages.append((logging.INFO, msg))
+                                else:
+                                    self.logger.info(msg)
+                            else:
+                                msg = f'Download #{download_num + 1}: Could not download file "{file_name}"'
+                                if show_progress_bar:
+                                    collected_messages.append((logging.ERROR, msg))
+                                else:
+                                    self.logger.error(msg)
+                except KeyboardInterrupt:
+                    # download interrupted
+                    interruption_event.set()
+                    raise
+
+                if show_progress_bar and not return_messages:
+                    # log the collected messages after all downloads completed
+                    for lvl, msg in collected_messages:
+                        self.logger.log(lvl, msg)
+
+        # return results
         if return_messages:
             return downloaded_files, collected_messages
         else:
