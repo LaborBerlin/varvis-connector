@@ -39,6 +39,7 @@ The following environment variables are optional:
 - ``VARVIS_CONNECT_TIMEOUT``: Optionally set a connection timeout independently in seconds.
 - ``VARVIS_READ_TIMEOUT``: Optionally set a response-read timeout independently in seconds.
 - ``VARVIS_BACKOFF_FACTOR_SECONDS``: Backoff factor in seconds for retries in case an API request fails. Default is 0.5s.
+- ``VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS``: Independent download retry backoff factor in seconds with full jitter. Default is 0.5s; zero disables delays.
 - ``VARVIS_BACKOFF_MAX_TRIES``: Maximum number of tries for in case an API request fails (must be at least 1).
 
 Additional environment variables must be set for testing environments. See the :ref:`development` chapter.
