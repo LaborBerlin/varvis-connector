@@ -1382,7 +1382,7 @@ def test_download_files_from_urls_parallel_cleans_up_after_keyboard_interrupt(
     response.iter_content.side_effect = iter_content
     monkeypatch.setattr("varvis_connector._varvis_client.Session.get", mock.Mock(return_value=response))
     monkeypatch.setattr(
-        "varvis_connector._varvis_client.concurrent.futures.as_completed",
+        "varvis_connector._varvis_client.as_completed",
         interrupt_when_download_started,
     )
     varvis = VarvisClient(MOCK_URL, "mockuser", "mockpw", logger=download_logger)
