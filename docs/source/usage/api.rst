@@ -57,7 +57,7 @@ The ``VarvisClient`` constructor accepts the following parameters:
 * ``connection_timeout`` (float, optional): Legacy HTTP timeout in seconds for both connection and response reads. Default is 10 seconds.
 * ``connect_timeout`` (float, optional): Connection timeout in seconds. When set with or without ``read_timeout``, phase-specific timeouts are used.
 * ``read_timeout`` (float, optional): Response-read timeout in seconds. When set with or without ``connect_timeout``, phase-specific timeouts are used.
-* ``backoff_factor_seconds`` (float, optional): Backoff factor for API request and session recovery retries in seconds. Default is 0.5 seconds.
+* ``backoff_factor_seconds`` (float, optional): Backoff factor for API request and session recovery retries in seconds. Default is 0.5 seconds. Request retry delays use full jitter, chosen uniformly between zero and ``backoff_factor_seconds * 2 ** (retry_number - 1)``; zero disables delays. Shared session recovery uses deterministic exponential backoff.
 * ``backoff_max_tries`` (int, optional): Maximum attempts per API request and per shared session recovery. Default is 5.
 * ``download_pool_size`` (int, optional): Number of cached download connection pools. Default is 0, which uses the parallel download worker count.
 * ``download_pool_max_size`` (int, optional): Maximum connections retained per download pool. Default is 0, which uses the parallel download worker count.
