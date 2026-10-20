@@ -140,6 +140,19 @@ You can inspect or retrieve the SNV annotation header schema without loading all
 Downloading Files
 -----------------
 
+Parallel downloads share a connection-pooled HTTP session for each batch, reusing connections
+to the same host. By default, both the cached pool count and the connections retained per
+pool use ``max_parallel_downloads``. Override these with ``download_pool_size`` and
+``download_pool_max_size`` when constructing the client. The session closes after all
+download workers finish.
+
+Download request retries use a separate budget and backoff from API requests and session
+recovery. With the defaults, a download request has up to three attempts, with random
+delays of 0–0.5 seconds before the first retry and 0–1 second before the second.
+``download_max_retries=0`` disables download retries, and
+``download_backoff_factor_seconds=0`` disables their delays. Failures while streaming
+the response body are cleaned up without restarting the download.
+
 The :meth:`~varvis_connector.VarvisClient.download_files` method downloads each file to a temporary file beside its
 destination and atomically replaces the destination only after the transfer completes. Failed or interrupted
 downloads preserve existing destination files and remove their partial temporary files. When the server provides a

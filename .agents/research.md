@@ -302,6 +302,8 @@ The client can be fully initialized from environment variables:
 - required: `VARVIS_URL`, `VARVIS_USER`, `VARVIS_PASSWORD`
 - optional: `HTTPS_PROXY`, `VARVIS_SSL_VERIFY`, `VARVIS_CONNECTION_TIMEOUT`, `VARVIS_CONNECT_TIMEOUT`, `VARVIS_READ_TIMEOUT`, `VARVIS_BACKOFF_FACTOR_SECONDS`, `VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS`, `VARVIS_BACKOFF_MAX_TRIES`
 
+Download settings include `VARVIS_DOWNLOAD_CHUNK_SIZE`, `VARVIS_DOWNLOAD_POOL_SIZE`,
+`VARVIS_DOWNLOAD_POOL_MAX_SIZE`, and `VARVIS_DOWNLOAD_MAX_RETRIES`, all parsed as integers.
 Type conversion is handled manually, including string-to-bool conversion for `ssl_verify`.
 
 The CLI also accepts a `--password` argument for constrained workflows. Its help text warns that command-line passwords may be visible in process listings and shell history, and CLI startup emits the same warning when the argument is explicitly used. The environment variable `VARVIS_PASSWORD` and interactive prompt avoid placing the password directly in the process argument list.
@@ -576,6 +578,13 @@ through the constructor, `VARVIS_DOWNLOAD_BACKOFF_FACTOR_SECONDS`, or the CLI op
 `--download-backoff-factor-seconds`; zero disables delays and negative values are rejected.
 Only request-level failures handled by the adapter are retried; interrupted streamed bodies
 are cleaned up without restarting the download.
+
+The CLI exposes download chunk size, pool sizes, and retry limits as global options. Both
+the CLI and `from_env()` read `VARVIS_DOWNLOAD_CHUNK_SIZE`, `VARVIS_DOWNLOAD_POOL_SIZE`,
+`VARVIS_DOWNLOAD_POOL_MAX_SIZE`, and `VARVIS_DOWNLOAD_MAX_RETRIES`, retaining constructor
+defaults when unset and rejecting malformed integers. The CLI's API backoff option is
+`--backoff-factor-seconds`. The usage guides document pooled download lifetimes, separate
+retry budgets, and the distinction between request jitter and deterministic shared login recovery.
 
 For each download:
 
