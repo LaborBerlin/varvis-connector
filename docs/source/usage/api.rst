@@ -58,7 +58,7 @@ The ``VarvisClient`` constructor accepts the following parameters:
 * ``connect_timeout`` (float, optional): Connection timeout in seconds. When set with or without ``read_timeout``, phase-specific timeouts are used.
 * ``read_timeout`` (float, optional): Response-read timeout in seconds. When set with or without ``connect_timeout``, phase-specific timeouts are used.
 * ``backoff_factor_seconds`` (float, optional): Backoff factor for API retries in seconds. Default is 0.5 seconds.
-* ``backoff_max_tries`` (int, optional): Maximum number of API tries. Default is 5.
+* ``backoff_max_tries`` (int, optional): Maximum attempts per API request and per shared session recovery. Default is 5.
 * ``logger`` (logging.Logger, optional): Logger instance to use instead of default logger.
 
 Authentication
@@ -72,11 +72,25 @@ Before making any API calls, you must authenticate:
 
 The client will automatically handle session management, including refreshing the authentication token when needed.
 
+Concurrent requests using an invalidated session share one recovery sequence. One worker
+performs up to ``backoff_max_tries`` re-login attempts in total while the others wait for
+the result. This login budget is separate from each request's HTTP attempt budget and
+does not include the initial explicit login. All affected workers receive the recovered
+session or the recovery failure, including workers whose responses arrive late. A later
+API request can start a fresh recovery sequence after a failed one. Requests with
+``allow_retries=False`` do not initiate automatic recovery.
+
 To explicitly log out and end the session:
 
 .. code-block:: python
 
     client.logout()
+
+Explicit logout invalidates existing recovery work, including when authentication has
+already been cleared during recovery backoff. Waiting workers receive a ``VarvisError``;
+old workers cannot start another login attempt or retry through a later session.
+A login already in progress finishes before logout proceeds. HTTP requests already in
+flight are not interrupted. Call ``client.login()`` explicitly to authenticate again.
 
 VarvisClient API
 ----------------

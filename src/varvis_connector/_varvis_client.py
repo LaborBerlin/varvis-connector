@@ -194,6 +194,15 @@ def _raise_varvis_error(error_data: dict[str, str | None], custom_error_msg: str
 
 
 @dataclass
+class _SessionState:
+    """Associate an authenticated session with its logout generation and recovery outcome."""
+
+    session: requests.Session
+    logout_generation: int
+    recovery: concurrent.futures.Future["_SessionState"] = field(default_factory=concurrent.futures.Future)
+
+
+@dataclass
 class VarvisClient:
     """
     Handles interactions with the Varvis API, including authentication and request
@@ -212,11 +221,19 @@ class VarvisClient:
     :ivar connect_timeout: Optional connection timeout in seconds.
     :ivar read_timeout: Optional response-read timeout in seconds.
     :ivar backoff_factor_seconds: Base factor for exponential backoff between retries.
-    :ivar backoff_max_tries: Maximum number of retry attempts for failed requests.
+    :ivar backoff_max_tries: Maximum attempts per API request and per shared session recovery.
+    :ivar download_chunk_size: Number of bytes read per chunk when downloading files.
     :ivar logger: Logger instance for recording operations and errors.
     :ivar _session: The HTTP session used for Varvis API communication,
         initialized during login and cleared during logout.
+    :ivar _session_lock: The reentrant lock protecting authentication state and login operations.
+    :ivar _recovery_lock: The lock for joining recovery without waiting for login I/O.
     :ivar _loggedin_csrf: The CSRF token used for API requests after login.
+    :ivar _session_state: The authenticated session and its shared recovery outcome.
+    :ivar _logout_generation: The counter invalidating existing requests on explicit logout.
+    :ivar _active_recoveries: The recovery owners whose waiters must be released on logout.
+    :ivar request_timeout: The read-only HTTP timeout, using phase-specific values when configured.
+    :ivar logged_in: The read-only authentication status, read under the session lock.
     """
 
     api_url: str = field(metadata={"help": "Varvis API URL", "envvar": "VARVIS_URL"})
@@ -255,7 +272,7 @@ class VarvisClient:
     )
     backoff_max_tries: int = field(
         default=5,
-        metadata={"help": "Maximum number of API request attempts. Must be at least 1"},
+        metadata={"help": "Maximum attempts per API request and per shared session recovery. Must be at least 1"},
     )
     download_chunk_size: int = field(
         default=5 * 1024 * 1024,
@@ -263,7 +280,12 @@ class VarvisClient:
     )
     logger: logging.Logger = logging.Logger("not_initialized", -1)
     _session: requests.Session | None = None
+    _session_lock: threading.RLock = field(default_factory=threading.RLock, init=False, repr=False, compare=False)
+    _recovery_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False, compare=False)
     _loggedin_csrf: str | None = None
+    _session_state: _SessionState | None = field(default=None, init=False, repr=False, compare=False)
+    _logout_generation: int = field(default=0, init=False, repr=False, compare=False)
+    _active_recoveries: list[_SessionState] = field(default_factory=list, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Additional setup steps."""
@@ -361,7 +383,8 @@ class VarvisClient:
     @property
     def logged_in(self) -> bool:
         """Check if the user is logged in."""
-        return self._session is not None and self._loggedin_csrf is not None
+        with self._session_lock:
+            return self._session is not None and self._loggedin_csrf is not None
 
     def login(self, raise_for_status: bool = True) -> bool:
         """
@@ -369,6 +392,10 @@ class VarvisClient:
         a session, retrieves the necessary cookies and CSRF token, and submits the user's
         credentials to authenticate. After a successful login, the session is updated
         with the new cookies and CSRF token required for subsequent authenticated requests.
+
+        Login is serialized with session acquisition and invalidation. Failed login attempts
+        clear the partially initialized session before releasing the lock. Successful login
+        creates a shared recovery outcome for requests using the authenticated session.
 
         This method raises an error if the CSRF token is not found in the initial response
         or if the login fails due to missing CSRF token in the login response.
@@ -378,80 +405,87 @@ class VarvisClient:
         :raises HTTPError: Indicates a failure during the HTTP communication with the varvis API.
         :return: True if the login was successful, False otherwise.
         """
-        if self.logged_in:
-            self.logger.info("Already logged in -- not performing a new login")
-            return True
+        with self._session_lock:
+            if self.logged_in:
+                self.logger.info("Already logged in -- not performing a new login")
+                return True
 
-        self.logger.info("Logging in")
+            self.logger.info("Logging in")
 
-        # set initial session
-        self._session = requests.Session()
-        self._session.verify = self.ssl_verify
+            # clear incomplete authentication before releasing the lock
+            try:
+                # set initial session
+                self._session = requests.Session()
+                self._session.verify = self.ssl_verify
 
-        if self.https_proxy:
-            self._session.proxies = {"https": self.https_proxy}
+                if self.https_proxy:
+                    self._session.proxies = {"https": self.https_proxy}
 
-        # get initial session cookie and CSRF code
-        self.logger.debug("Acquiring initial session")
-        initial_resp = self._session.head(self.api_url, stream=True, timeout=self.request_timeout)
-        if raise_for_status:
-            initial_resp.raise_for_status()
-        elif not initial_resp.ok:
-            self.logger.error("Could not acquire initial session -- aborting login")
-            self._reset_state_on_logout()
-            return False
+                # get initial session cookie and CSRF code
+                self.logger.debug("Acquiring initial session")
+                initial_resp = self._session.head(self.api_url, stream=True, timeout=self.request_timeout)
+                if raise_for_status:
+                    initial_resp.raise_for_status()
+                elif not initial_resp.ok:
+                    self.logger.error("Could not acquire initial session -- aborting login")
+                    return False
 
-        initial_cookies = initial_resp.cookies
-        initial_csrf = initial_resp.headers.get("X-CSRF-TOKEN", None)
-        if not initial_csrf:
-            if raise_for_status:
-                raise VarvisError("CSRF token not found in initial response")
-            else:
-                self.logger.error("CSRF token not found in initial response")
-                self._reset_state_on_logout()
-                return False
-        self.logger.debug("Initial session OK")
+                initial_cookies = initial_resp.cookies
+                initial_csrf = initial_resp.headers.get("X-CSRF-TOKEN", None)
+                if not initial_csrf:
+                    if raise_for_status:
+                        raise VarvisError("CSRF token not found in initial response")
+                    else:
+                        self.logger.error("CSRF token not found in initial response")
+                        return False
+                self.logger.debug("Initial session OK")
 
-        # log in using the provided credentials, CSRF code and initial cookie
-        login_data = {
-            "username": self.username,
-            "password": self.password,
-            "_csrf": initial_csrf,
-        }
+                # log in using the provided credentials, CSRF code and initial cookie
+                login_data = {
+                    "username": self.username,
+                    "password": self.password,
+                    "_csrf": initial_csrf,
+                }
 
-        self.logger.debug("Acquiring login session")
-        login_resp = self._send_request(
-            "POST",
-            "login",
-            allow_retries=False,
-            raise_for_status=raise_for_status,
-            cookies=initial_cookies,
-            data=login_data,
-        )
+                self.logger.debug("Acquiring login session")
+                login_resp = self._send_request(
+                    "POST",
+                    "login",
+                    allow_retries=False,
+                    raise_for_status=raise_for_status,
+                    cookies=initial_cookies,
+                    data=login_data,
+                )
 
-        # get the session cookie and CSRF code that can be used for the rest of the session
-        loggedin_cookies = login_resp.cookies
-        loggedin_csrf = login_resp.headers.get("X-CSRF-TOKEN", None)
-        if not loggedin_csrf:
-            # it seems the varvis API responds with HTTP 200 OK in case the login fails, but doesn't return a CSRF in that case
-            if raise_for_status:
-                raise VarvisError("Login failed (CSRF token not found in login response)")
-            else:
-                self.logger.error("Login failed (CSRF token not found in login response)")
-                self._reset_state_on_logout()
-                return False
+                # get the session cookie and CSRF code that can be used for the rest of the session
+                loggedin_cookies = login_resp.cookies
+                loggedin_csrf = login_resp.headers.get("X-CSRF-TOKEN", None)
+                if not loggedin_csrf:
+                    # it seems the varvis API responds with HTTP 200 OK in case the login fails, but doesn't return a CSRF in that case
+                    if raise_for_status:
+                        raise VarvisError("Login failed (CSRF token not found in login response)")
+                    else:
+                        self.logger.error("Login failed (CSRF token not found in login response)")
+                        return False
 
-        self.logger.debug("Login session OK")
+                self.logger.debug("Login session OK")
 
-        if api_build_version := login_resp.headers.get("BUILD-VERSION", None):
-            self.logger.debug("Varvis API build version: %s", api_build_version)
+                if api_build_version := login_resp.headers.get("BUILD-VERSION", None):
+                    self.logger.debug("Varvis API build version: %s", api_build_version)
 
-        # set cookies and CSRF for further requests
-        self._session.cookies.update(loggedin_cookies)
-        self._session.headers.update({"X-CSRF-TOKEN": loggedin_csrf})
-        self._loggedin_csrf = loggedin_csrf
+                # set cookies and CSRF for further requests
+                self._session.cookies.update(loggedin_cookies)
+                self._session.headers.update({"X-CSRF-TOKEN": loggedin_csrf})
+                self._loggedin_csrf = loggedin_csrf
+                # publish the authenticated record without blocking new recovery participants on login I/O
+                with self._recovery_lock:
+                    self._session_state = _SessionState(self._session, self._logout_generation)
 
-        self.logger.info("Login successful")
+                self.logger.info("Login successful")
+
+            finally:
+                if not self.logged_in:
+                    self._reset_state_on_logout(clear_recovery=False)
 
         return True
 
@@ -461,25 +495,33 @@ class VarvisClient:
 
         This method ensures that the user is logged out by sending a logout request to the
         appropriate endpoint. It clears the session data and invalidates the CSRF token.
-        If the user is not logged in, the method will not perform any
-        action and logs a corresponding message.
+        Existing recovery work is invalidated even if authentication is already cleared.
+        Waiting workers receive a VarvisError, and recovery cannot log in again after
+        logout. A login already in progress finishes before logout acquires the lock.
+        In-flight HTTP requests are not interrupted. A later explicit login is allowed.
 
         :raises HTTPError: Indicates a failure during the logout HTTP request.
         """
-        if not self.logged_in:
-            self.logger.info("Not logged in -- not performing a logout")
-            return
+        # invalidate old workers and wake recovery waiters before clearing authentication
+        with self._session_lock:
+            with self._recovery_lock:
+                self._logout_generation += 1
+                for state in [*self._active_recoveries, self._session_state]:
+                    if state is not None and not state.recovery.done():
+                        state.recovery.set_exception(VarvisError("Session recovery cancelled by logout"))
 
-        # log out
-        self.logger.info("Logging out")
+            try:
+                if not self.logged_in:
+                    self.logger.info("Not logged in -- not performing a logout")
+                    return
 
-        logout_data = {"_csrf": self._loggedin_csrf}
-
-        try:
-            self._send_request("POST", "logout", allow_retries=False, data=logout_data)
-            self.logger.info("Logout successful")
-        finally:
-            self._reset_state_on_logout()
+                # send logout while preventing another login from replacing the session
+                self.logger.info("Logging out")
+                logout_data = {"_csrf": self._loggedin_csrf}
+                self._send_request("POST", "logout", allow_retries=False, data=logout_data)
+                self.logger.info("Logout successful")
+            finally:
+                self._reset_state_on_logout()
 
     def get_snv_annotations(self, analysis_id: int) -> SnvAnnotationData:
         """
@@ -1780,6 +1822,68 @@ class VarvisClient:
         data = model.model_dump()
         return self._send_request(method, endpoint, handle_http_errors=handle_http_errors, json=data)
 
+    def _recover_session(self, state: _SessionState) -> _SessionState:
+        """
+        Share one bounded re-login sequence among requests using the same session.
+
+        One worker performs up to ``backoff_max_tries`` login attempts. Other workers
+        wait for that session's recovery future and receive its result or failure,
+        including workers whose forced-logout responses arrive after recovery finishes.
+        Explicit logout invalidates the session's generation and wakes waiting workers
+        with a shared failure instead of allowing further login attempts.
+        """
+        # elect one recovery owner while keeping the outcome attached to the old session
+        with self._recovery_lock:
+            if state.logout_generation != self._logout_generation:
+                raise VarvisError("Session recovery cancelled by logout")
+            owner = not state.recovery.running() and not state.recovery.done()
+            if owner:
+                state.recovery.set_running_or_notify_cancel()
+                self._active_recoveries.append(state)
+
+        if not owner:
+            # the future waits without holding the session lock needed by the login owner
+            return state.recovery.result()
+
+        # keep the entire login retry budget independent of the number of request workers
+        try:
+            last_error: Exception | None = None
+            for attempt in range(1, self.backoff_max_tries + 1):
+                with self._session_lock:
+                    # reject recovery invalidated during backoff or before lock acquisition
+                    if state.logout_generation != self._logout_generation:
+                        raise VarvisError("Session recovery cancelled by logout")
+                    try:
+                        if self.login(raise_for_status=False):
+                            recovered = self._session_state
+                            if recovered is None:
+                                raise RuntimeError("Login succeeded without initializing session state")
+                            state.recovery.set_result(recovered)
+                            return recovered
+                    except (requests.RequestException, VarvisError) as exc:
+                        last_error = exc
+
+                # release the session lock between attempts so other requests can join recovery
+                if attempt < self.backoff_max_tries:
+                    wait_sec = 2 ** (attempt - 1) * self.backoff_factor_seconds
+                    self.logger.debug("Retrying shared login in %.1f seconds", wait_sec)
+                    time.sleep(wait_sec)
+
+            raise VarvisError(
+                f"Failed to reauthenticate with Varvis API after {self.backoff_max_tries} attempts"
+            ) from last_error
+        except BaseException as exc:
+            # always wake waiting workers, including when the recovery owner is interrupted
+            with self._recovery_lock:
+                if not state.recovery.done():
+                    state.recovery.set_exception(exc)
+                    raise
+            return state.recovery.result()
+        finally:
+            # retain sleeping owners across replacement sessions until they have stopped
+            with self._recovery_lock:
+                self._active_recoveries.remove(state)
+
     def _send_request(
         self,
         method: str,
@@ -1797,7 +1901,17 @@ class VarvisClient:
 
         This method constructs the full API URL dynamically depending on the endpoint and
         manages session-based retries when needed. Certain API quirks, such as session
-        invalidations, are taken into account and handled appropriately.
+        invalidations, are taken into account and handled appropriately. Session acquisition
+        waits for login to finish, while requests run outside the session lock. Forced logout
+        responses invalidate only the session used for that request. Concurrent requests
+        share one bounded re-login sequence and its success or failure. A later request
+        may start fresh recovery after a failed sequence. The first request requires an
+        explicit login, and disabled retries do not initiate recovery.
+
+        Before sending, delayed workers follow successive recovery outcomes until reaching
+        a session without known recovery, without consuming HTTP attempts.
+        Explicit logout invalidates existing workers so they cannot initiate recovery
+        or retry requests after a later explicit login. In-flight I/O is not interrupted.
 
         :param method: HTTP method to use for the request (e.g., "GET", "POST"). Type should match a valid HTTP method string.
         :param endpoint: Partial URL to append to the API base URL. Determines the specific endpoint being addressed.
@@ -1812,8 +1926,34 @@ class VarvisClient:
         :return: HTTP response object from the `requests` library containing the server's response.
         """
 
-        if self._session is None:
-            raise VarvisError("Session not initialized -- you need to login first")
+        # join the current recovery group before waiting for any in-progress login I/O
+        is_authentication = endpoint.removeprefix("/") in {"login", "logout"}
+        with self._recovery_lock:
+            session_state = self._session_state
+            if not is_authentication and session_state is not None and session_state.recovery.done():
+                # a new request gets a fresh budget while older requests retain the failed outcome
+                session_state = _SessionState(session_state.session, session_state.logout_generation)
+                self._session_state = session_state
+
+        if not is_authentication and session_state is not None and session_state.recovery.running():
+            # wait outside both locks so workers arriving during the last login share its outcome
+            session_state = self._recover_session(session_state)
+
+        # capture an authenticated session, including when the initial explicit login just finished
+        with self._session_lock:
+            if session_state is None:
+                with self._recovery_lock:
+                    session_state = self._session_state
+            request_session = self._session if is_authentication or session_state is None else session_state.session
+            if request_session is None and session_state is None:
+                raise VarvisError("Session not initialized -- you need to login first")
+            needs_recovery = not is_authentication and not self.logged_in
+
+        if needs_recovery and allow_retries and session_state is not None:
+            session_state = self._recover_session(session_state)
+            request_session = session_state.session
+        elif needs_recovery:
+            raise VarvisError("Session not authenticated -- you need to login first")
 
         endpoint = endpoint.removeprefix("/")
 
@@ -1857,24 +1997,29 @@ class VarvisClient:
             )
 
             retry = False  # reset on each try
-            send_request = True
 
-            if not self._session:  # re-login was requested on previous try
-                self.logger.debug("Attempting re-login after failed request")
+            # follow successive recoveries before sending through a replacement session
+            while (
+                not is_authentication
+                and session_state is not None
+                and (session_state.recovery.running() or session_state.recovery.done())
+            ):
+                session_state = self._recover_session(session_state)
+                request_session = session_state.session
 
-                # try to login again; it uses`allow_retries=False`, as this would cause recursive retry loops
-                if self.login(raise_for_status=False):
-                    # successfully logged in -- we can continue with the actual request
-                    self.logger.debug("Re-login successful")
-                else:
-                    # we will have to try logging in again -- we will not send the actual request now
-                    self.logger.debug("Re-login failed")
-                    retry = True
-                    send_request = False
+            # stop old workers before another send even after a later explicit login
+            with self._session_lock:
+                if (
+                    not is_authentication
+                    and session_state is not None
+                    and session_state.logout_generation != self._logout_generation
+                ):
+                    raise VarvisError("Session recovery cancelled by logout")
 
-            if send_request:
+            if request_session is not None:
+                # send the request using the current request session
                 try:
-                    resp = self._session.request(
+                    resp = request_session.request(
                         method,
                         request_url,
                         stream=stream,
@@ -1887,13 +2032,19 @@ class VarvisClient:
                     if resp.status_code == 302 and resp.headers.get("Location", "").removesuffix(
                         "/"
                     ) == self.api_url.removesuffix("/"):
-                        # Varvis API quirk: in case there are too many concurrent requests for the same session, the session
-                        # seems to be invalidated and the response is a redirect to the base URL; we need to login again after
-                        # waiting a bit
+                        # Varvis API quirk: in case there are too many concurrent requests for the same session, the
+                        # session seems to be invalidated and the response is a redirect to the base URL; we need to
+                        # login again after waiting a bit
                         self.logger.debug("Possible forced logout from API detected -- will try to login again")
                         retry = True
-                        self._reset_state_on_logout()
+                        # ignore stale redirects from a session that has already been replaced
+                        with self._session_lock:
+                            if self._session is request_session:
+                                self._loggedin_csrf = None
                         resp = None
+                        if allow_retries and n_tries < max_retries and session_state is not None:
+                            session_state = self._recover_session(session_state)
+                            request_session = session_state.session
                 except requests.ConnectTimeout as exc:
                     self.logger.debug("Connection timeout")
                     last_transport_error = exc
@@ -1949,6 +2100,17 @@ class VarvisClient:
 
         return resp
 
-    def _reset_state_on_logout(self) -> None:
-        self._session = None
-        self._loggedin_csrf = None
+    def _reset_state_on_logout(self, clear_recovery: bool = True) -> None:
+        """
+        Clear authentication while holding the session lock.
+
+        :param clear_recovery: Whether to discard the shared recovery record. Failed
+            login attempts retain it so participating requests share the final outcome.
+        """
+        # serialize authentication state changes
+        with self._session_lock:
+            self._session = None
+            self._loggedin_csrf = None
+            if clear_recovery:
+                with self._recovery_lock:
+                    self._session_state = None
