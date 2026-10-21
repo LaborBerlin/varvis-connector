@@ -32,7 +32,7 @@ from typing import Type, TypeVar, Callable, Any, BinaryIO, overload, Literal
 from collections.abc import Collection, Iterator, Sequence
 
 import requests
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from requests import Response, Session
 from requests.adapters import HTTPAdapter
 from tqdm import tqdm
@@ -145,16 +145,16 @@ def _parse_response_for_model_list(
     else:
         # ... while others return the payload directly in the response body
         data = resp.json()
-    cls_validation_method = getattr(model_class, "model_validate")
-    return_data = []
+
     if not isinstance(data, list):
         raise VarvisError("Response data should be a list")
-    for i, item in enumerate(data):
-        try:
-            return_data.append(cls_validation_method(item))
-        except ValidationError as e:
-            raise VarvisError(f"Response validation failed for data item #{i}: {e}") from e
-    return return_data
+
+    model_list_adapter = TypeAdapter(list[model_class])
+
+    try:
+        return model_list_adapter.validate_python(data)
+    except ValidationError as e:
+        raise VarvisError(f"Response validation failed: {e}") from e
 
 
 def _parse_response_for_primitive(
