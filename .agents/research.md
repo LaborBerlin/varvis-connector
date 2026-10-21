@@ -515,6 +515,14 @@ The CLI is designed for shell pipelines and scripting:
 The command layer explicitly distinguishes those cases with `allow_empty_data`.
 Output serialization retains a temporary JSON-compatible representation for the current model,
 without allocating a duplicate dictionary/list tree for the entire batch of results.
+Input and output arguments are parsed as `pathlib.Path` objects without opening files.
+The path `-` selects stdin or stdout. Input files are read as UTF-8 only when needed;
+explicit data arguments can bypass an unused input path. Regular output files are opened as
+UTF-8 after retrieval and empty-result validation. JSONL output opens on the first record,
+or after successful empty retrieval. Argument errors, login failures, and total retrieval
+failures before any records leave existing output intact. Owned files are closed after use,
+including exceptions, while standard streams remain open. Streaming or serialization failures
+after writing begins can leave partial output. Stdout log routing uses the selected path.
 
 ### Input model for write commands
 
