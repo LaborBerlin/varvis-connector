@@ -23,6 +23,7 @@ import sys
 import tempfile
 from fnmatch import fnmatchcase
 from io import StringIO
+from pathlib import Path
 from typing import Any
 from unittest import mock
 
@@ -146,7 +147,7 @@ class VirtualPanelUpdateDataFactory(ModelFactory):
 @pytest.mark.parametrize("factory", [AnalysisItemFactory, PendingCnvDataFactory])
 @pytest.mark.parametrize("output_indent", [None, 2])
 @pytest.mark.parametrize("container", ["model", "list", "dict"])
-def test_write_file_output_serializes_models_on_demand(factory, container, output_indent):
+def test_write_file_output_serializes_models_on_demand(factory, container, output_indent, monkeypatch):
     """Preserve JSON output while passing the original result container to the writer."""
     # include nested models, dates, integer keys, and plain JSON values
     model = factory.build()
@@ -160,11 +161,11 @@ def test_write_file_output_serializes_models_on_demand(factory, container, outpu
         ),
     }[container]
     output = StringIO()
-    output.name = "<stdout>"
+    monkeypatch.setattr(sys, "stdout", output)
     cmd = _CmdBase(
         logger=logging.getLogger(__name__),
         client=mock.Mock(spec=VarvisClient),
-        parsed_args=argparse.Namespace(output=output, output_indent=output_indent),
+        parsed_args=argparse.Namespace(output=Path("-"), output_indent=output_indent),
     )
 
     # ensure serialization starts with the original container instead of a prebuilt copy
@@ -172,6 +173,164 @@ def test_write_file_output_serializes_models_on_demand(factory, container, outpu
         cmd._write_file_output(data)
     assert dump.call_args.args[0] is data
     assert output.getvalue() == json.dumps(expected, indent=output_indent)
+
+
+@pytest.mark.parametrize("exit_args", [[], ["--help"], ["--unknown-option"]])
+@pytest.mark.parametrize("existing_output", [False, True])
+def test_file_arguments_only_parse_paths(tmp_path, exit_args, existing_output):
+    """Parse file arguments without opening input or creating or truncating output."""
+    # use missing input and preserve any existing output through parsing and parser exits
+    output_path = tmp_path / "output.json"
+    input_path = tmp_path / "missing.json"
+    if existing_output:
+        output_path.write_text("preserve me")
+    parser = argparse.ArgumentParser()
+    _CmdBase._set_arguments_for_fileinput(parser, "Input JSON")
+    _CmdBase._set_arguments_for_fileoutput(parser)
+    args = ["--input", str(input_path), "--output", str(output_path), *exit_args]
+    if exit_args:
+        with pytest.raises(SystemExit):
+            parser.parse_args(args)
+    else:
+        parsed = parser.parse_args(args)
+        assert parsed.input == input_path
+        assert parsed.output == output_path
+    assert not input_path.exists()
+    assert output_path.read_text() == "preserve me" if existing_output else not output_path.exists()
+
+
+@pytest.mark.parametrize("optional_input", [False, True])
+def test_file_argument_defaults_are_paths(optional_input):
+    """Preserve '-' defaults for standard streams and None for optional request input."""
+    # argument parsing leaves stream selection to command execution
+    parser = argparse.ArgumentParser()
+    _CmdBase._set_arguments_for_fileinput(parser, "Input JSON", default=None if optional_input else "-")
+    _CmdBase._set_arguments_for_fileoutput(parser)
+    parsed = parser.parse_args([])
+    assert parsed.input == (None if optional_input else Path("-"))
+    assert parsed.output == Path("-")
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("failure", ["arguments", "login", "retrieval"])
+def test_failed_commands_preserve_output_file(tmp_path, monkeypatch, varvis_mockapi_with_login, stream, failure):
+    """Keep existing output intact when parsing, login, or retrieval fails before any records arrive."""
+    # set up a command with a pre-existing output file
+    further_args = ["--stream", "1"] if stream else ["1"]
+    _, output_path = _set_up_cmd_args_and_env_with_output(
+        tmp_path, monkeypatch, "get-snv-annotations", True, None, further_args
+    )
+    assert output_path is not None
+    output_path.write_text("preserve me")
+    if failure == "arguments":
+        monkeypatch.setattr(sys, "argv", [*sys.argv, "--output-indent", "invalid"])
+    elif failure == "login":
+        monkeypatch.setattr(VarvisClient, "login", mock.Mock(side_effect=VarvisError("login failed")))
+    else:
+        varvis_mockapi_with_login.get(MOCK_URL + "api/analysis/1/annotations", status_code=400)
+
+    # no output destination should be opened before data is available
+    with pytest.raises(SystemExit):
+        main()
+    assert output_path.read_text() == "preserve me"
+
+
+@pytest.mark.parametrize("explicit_dash", [False, True])
+def test_stdout_output_routes_logs_to_stderr(capfd, monkeypatch, tmp_path, varvis_mockapi_with_login, explicit_dash):
+    """Keep JSON stdout clean using path-based stream selection without test routing overrides."""
+    # exercise both default stdout and an explicit '-' output argument
+    further_args = ["LIMS-1", "--output", "-"] if explicit_dash else ["LIMS-1"]
+    _set_up_cmd_args_and_env_with_output(tmp_path, monkeypatch, "get-internal-person-id", False, None, further_args)
+    monkeypatch.delenv("TEST_WRITES_TO_STDOUT")
+    varvis_mockapi_with_login.get(MOCK_URL + "api/person/LIMS-1/id", json={"success": True, "response": 123})
+    main()
+    captured = capfd.readouterr()
+    assert json.loads(captured.out) == {"LIMS-1": 123}
+    assert "Running varvis_connector" in captured.err
+
+
+@pytest.mark.parametrize("stream", [False, True])
+def test_successful_empty_output_replaces_existing_file(tmp_path, monkeypatch, varvis_mockapi_with_login, stream):
+    """Write successful empty JSON and JSONL results instead of retaining stale output."""
+    # request permits empty JSON while streaming permits an empty data array
+    command = "get-snv-annotations" if stream else "request"
+    further_args = ["--stream", "1"] if stream else ["/empty"]
+    _, output_path = _set_up_cmd_args_and_env_with_output(tmp_path, monkeypatch, command, True, None, further_args)
+    assert output_path is not None
+    output_path.write_text("stale output")
+    endpoint = "api/analysis/1/annotations" if stream else "empty"
+    varvis_mockapi_with_login.get(MOCK_URL + endpoint, json={"data": [], "header": []} if stream else [])
+    main()
+    assert output_path.read_text() == ("" if stream else "[]")
+
+
+def test_person_arguments_ignore_missing_input_file(tmp_path, monkeypatch, varvis_mockapi_with_login):
+    """Ignore an unreadable input path when explicit person data takes precedence."""
+    # an unused input path must not prevent the command from executing
+    missing = tmp_path / "missing.json"
+    _set_up_cmd_args_and_env_with_output(
+        tmp_path,
+        monkeypatch,
+        "create-or-update-person",
+        False,
+        None,
+        ["--lims-id", "LIMS-1", "--input", str(missing)],
+    )
+    request = varvis_mockapi_with_login.put(MOCK_URL + "api/person", json=123)
+    main()
+    assert request.called
+    assert request.last_request.json()["id"] == "LIMS-1"
+    assert not missing.exists()
+
+
+def test_missing_input_is_reported_during_execution(capfd, tmp_path, monkeypatch, varvis_mockapi_with_login):
+    """Report an input file error without touching the selected output file."""
+    # missing files are accepted as paths during parsing and fail only when read
+    _, output_path = _set_up_cmd_args_and_env_with_output(
+        tmp_path, monkeypatch, "request", True, None, ["--input", str(tmp_path / "missing.json"), "/unused"]
+    )
+    assert output_path is not None
+    output_path.write_text("preserve me")
+    with pytest.raises(SystemExit) as exc_info:
+        main()
+    assert exc_info.value.code == 1
+    assert "FileNotFoundError" in capfd.readouterr().err
+    assert output_path.read_text() == "preserve me"
+
+
+def test_file_input_preserves_standard_streams(monkeypatch):
+    """Read stdin and write stdout without closing either standard stream."""
+    # use explicit path sentinels rather than relying on stream names
+    stdin, stdout = StringIO("München"), StringIO()
+    monkeypatch.setattr(sys, "stdin", stdin)
+    monkeypatch.setattr(sys, "stdout", stdout)
+    cmd = _CmdBase(
+        logging.getLogger(__name__),
+        mock.Mock(spec=VarvisClient),
+        argparse.Namespace(input=Path("-"), output=Path("-"), output_indent=None),
+    )
+    assert cmd._read_file_input() == "München"
+    cmd._write_file_output({"city": "München"})
+    assert json.loads(stdout.getvalue()) == {"city": "München"}
+    assert not stdin.closed
+    assert not stdout.closed
+
+
+def test_file_output_closes_after_serialization_error(tmp_path):
+    """Close an owned output file when JSON serialization fails."""
+    # retain a handle so cleanup can be checked after a failing write
+    output_path = tmp_path / "output.json"
+    output = output_path.open("w")
+    cmd = _CmdBase(
+        logging.getLogger(__name__),
+        mock.Mock(spec=VarvisClient),
+        argparse.Namespace(output=output_path, output_indent=None),
+    )
+    with mock.patch.object(Path, "open", return_value=output):
+        with mock.patch("varvis_connector._cli.json.dump", side_effect=RuntimeError("write failed")):
+            with pytest.raises(RuntimeError, match="write failed"):
+                cmd._write_file_output({"value": 1})
+    assert output.closed
 
 
 @pytest.fixture()
