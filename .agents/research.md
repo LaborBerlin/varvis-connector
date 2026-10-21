@@ -52,7 +52,7 @@ The implementation is compact and centered around a few files:
 - `src/varvis_connector/_varvis_client.py`
   The core API client and transport logic.
 - `src/varvis_connector/_snv_stream_parser.py`
-  Low-overhead streaming JSON parser for SNV annotation payloads supporting row-by-row iteration with constant memory overhead.
+  Low-overhead streaming JSON parser for SNV annotation payloads supporting row-by-row iteration, with parser storage depending on the current row or metadata value.
 - `src/varvis_connector/_cli.py`
   The full CLI implementation, including subcommand registration, argument parsing, data loading, command orchestration, and download UX.
 - `src/varvis_connector/models.py`
@@ -720,7 +720,16 @@ results propagate failures to the test thread.
 
 Those cover the most fragile integration behavior.
 
-The streaming parser waits for a delimiter before accepting numeric metadata tokens. Regression tests cover split integers, fractions, exponents, final-value delimiters, buffer compaction, and incomplete or malformed numbers for both HTTP responses and binary files.
+The streaming parser decodes complete values directly. After an incomplete prefix, it scans
+subsequent chunks while retaining string, escape, and nested-container state, then retries decoding
+once the value boundary is known. Keys, rows, and metadata use the same scanner. Text fragments
+are retained separately and joined once, avoiding repeated copying of the accumulated prefix.
+Scalar values require a delimiter before acceptance. No fixed size limit is imposed: memory still
+depends on the largest individual row or metadata value, plus retained metadata; unterminated
+values can continue accumulating until EOF. Regression tests cover split integers, fractions,
+exponents, final-value delimiters, compaction, large keys and values, nested containers, escapes,
+Unicode, bounded decoder attempts, lazy row delivery, and malformed or truncated values for
+HTTP responses and binary files.
 
 ### Coverage philosophy
 
