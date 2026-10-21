@@ -733,6 +733,8 @@ results propagate failures to the test thread.
 
 Those cover the most fragile integration behavior.
 
+The streaming parser waits for a delimiter before accepting numeric metadata tokens. Regression tests cover split integers, fractions, exponents, final-value delimiters, buffer compaction, and incomplete or malformed numbers for both HTTP responses and binary files.
+
 ### Coverage philosophy
 
 The project has an unusual but good coverage rule: it cares specifically about full coverage in test files themselves, under the assumption that misses in test code often indicate incomplete test implementation. `scripts/coverage-check.sh` enforces that locally, and CI uses coverage reporting on PRs.

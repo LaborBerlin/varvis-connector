@@ -150,6 +150,64 @@ def test_stream_snv_json_from_request_or_buffer_unexpected_eof():
         list(stream_snv_json_from_request_or_buffer(resp))
 
 
+@pytest.mark.parametrize("use_response", [False, True])
+@pytest.mark.parametrize("chunk_size", [1, 2, 7, 65536])
+@pytest.mark.parametrize("number", ["100", "-100", "0", "1.25", "-0.125", "1e3", "1e-3", "-2.5E+12"])
+def test_stream_snv_json_numeric_metadata_split(use_response, chunk_size, number):
+    """Preserve complete integers, fractions, and exponents across response and file chunks."""
+    # numeric prefixes must not be accepted before the following comma arrives
+    raw_bytes = b'{"data": [], "threshold": ' + number.encode() + b', "header": []}'
+    source = _create_mock_streaming_response(raw_bytes) if use_response else io.BytesIO(raw_bytes)
+    metadata = {}
+    with source:
+        assert list(stream_snv_json_from_request_or_buffer(source, chunk_size=chunk_size, metadata_out=metadata)) == []
+    assert metadata == {"threshold": json.loads(number), "header": []}
+
+
+@pytest.mark.parametrize("use_response", [False, True])
+@pytest.mark.parametrize("delimiter", [b"}", b" \t\r\n}"])
+def test_stream_snv_json_numeric_metadata_at_root_end(use_response, delimiter):
+    """Accept closing braces and whitespace as delimiters for the final numeric metadata value."""
+    raw_bytes = b'{"data": [], "threshold": 1.25e-3' + delimiter
+    source = _create_mock_streaming_response(raw_bytes) if use_response else io.BytesIO(raw_bytes)
+
+    # the final number needs a delimiter even when there is no following header
+    metadata = {}
+    with source:
+        assert list(stream_snv_json_from_request_or_buffer(source, chunk_size=1, metadata_out=metadata)) == []
+    assert metadata == {"threshold": 0.00125}
+
+
+@pytest.mark.parametrize("use_response", [False, True])
+def test_stream_snv_json_numeric_metadata_after_compaction(use_response):
+    """Retry numeric decoding correctly when fetching its suffix compacts the input buffer."""
+    # position the number beyond the compaction threshold and split its exponent across reads
+    raw_bytes = b'{"data": [], "padding": "' + b"x" * 65536 + b'", "threshold": 1e-3}'
+    source = _create_mock_streaming_response(raw_bytes) if use_response else io.BytesIO(raw_bytes)
+    metadata = {}
+    with source:
+        assert (
+            list(stream_snv_json_from_request_or_buffer(source, chunk_size=len(raw_bytes) - 3, metadata_out=metadata))
+            == []
+        )
+    assert metadata == {"padding": "x" * 65536, "threshold": 0.001}
+
+
+@pytest.mark.parametrize("use_response", [False, True])
+@pytest.mark.parametrize("number", ["1", "1.", "1e", "1e+", "1e-", "100x"])
+def test_stream_snv_json_unterminated_numeric_metadata(use_response, number):
+    """Reject numeric metadata without a complete token and a valid delimiter."""
+    raw_bytes = b'{"data": [], "threshold": ' + number.encode()
+    source = _create_mock_streaming_response(raw_bytes) if use_response else io.BytesIO(raw_bytes)
+    metadata = {}
+
+    # incomplete or malformed values must not be published to the caller's metadata
+    with source:
+        with pytest.raises(VarvisError, match="Unexpected EOF while parsing value for key 'threshold'"):
+            list(stream_snv_json_from_request_or_buffer(source, chunk_size=1, metadata_out=metadata))
+    assert "threshold" not in metadata
+
+
 def test_resolve_header_indices():
     """Test resolving canonical column indices from header items."""
     header = [
