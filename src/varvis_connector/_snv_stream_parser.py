@@ -94,8 +94,9 @@ def stream_snv_json_from_request_or_buffer(
     """
     Streams 2D variant row arrays incrementally from a Varvis SNV JSON response.
 
-    Parses the response stream in a single pass with constant memory overhead. Handles
-    arbitrary key ordering in the root JSON object (including payloads where 'data' precedes
+    Parses the response stream in a single pass with constant memory overhead.
+    Numeric metadata is decoded only when a delimiter confirms that its token is complete.
+    Handles arbitrary key ordering in the root JSON object (including payloads where 'data' precedes
     'header'). Populates metadata_out with non-data keys as they are encountered.
     Binary input is read from its current position without rewinding. UTF-8 characters
     split across chunks are decoded incrementally. The caller owns closing the input.
@@ -232,6 +233,11 @@ def stream_snv_json_from_request_or_buffer(
             while True:
                 try:
                     val, end_idx = decoder.raw_decode(buffer, pos)
+                    # wait for a delimiter before accepting split numbers or exponents
+                    if isinstance(val, (int, float)) and (end_idx == len(buffer) or buffer[end_idx] not in " \t\r\n,}"):
+                        if not fetch_more():
+                            raise VarvisError(f"Unexpected EOF while parsing value for key '{key}'")
+                        continue
                     pos = end_idx
                     if metadata_out is not None:
                         metadata_out[key] = val
