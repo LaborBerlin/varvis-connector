@@ -29,6 +29,7 @@ These options apply to all commands:
 * ``--read-timeout SECONDS``: Optional response-read timeout in seconds. If not provided, the value from the ``VARVIS_READ_TIMEOUT`` environment variable will be used.
 * ``--backoff-factor-seconds SECONDS``: Backoff factor for API request and session recovery retries. Request delays use full jitter; shared session recovery uses deterministic exponential backoff. If not provided, ``VARVIS_BACKOFF_FACTOR_SECONDS`` is used. Default is 0.5 seconds; zero disables delays.
 * ``--backoff-max-tries TRIES``: Maximum attempts per API request and per shared session recovery, with separate budgets. If not provided, ``VARVIS_BACKOFF_MAX_TRIES`` is used. Default is 5.
+* ``--download-chunk-size BYTES``: Bytes read per file-download chunk. If not provided, ``VARVIS_DOWNLOAD_CHUNK_SIZE`` is used. Default is 5242880 (5 MiB). This does not set the SNV streaming chunk size.
 * ``--download-pool-size SIZE``: Number of cached download connection pools. If not provided, ``VARVIS_DOWNLOAD_POOL_SIZE`` is used. Default is 0, which uses the parallel download worker count.
 * ``--download-pool-max-size SIZE``: Maximum connections retained per download pool. If not provided, ``VARVIS_DOWNLOAD_POOL_MAX_SIZE`` is used. Default is 0, which uses the parallel download worker count.
 * ``--download-max-retries RETRIES``: Maximum HTTP adapter retries per download request. If not provided, ``VARVIS_DOWNLOAD_MAX_RETRIES`` is used. Default is 2, allowing three attempts in total. Failures while streaming the response body are not retried.
@@ -105,6 +106,27 @@ Retrieves the SNV annotations for given analysis IDs. Generates JSON that maps a
 
 - ``analysis-ids`` (required) (one or more values): One or more analysis IDs (integers).
 - ``--stream``: Stream variants row-by-row as newline-delimited JSON (JSONL) instead of loading all analyses eagerly into memory. Recommended for large WES or WGS analyses to avoid high memory usage and out-of-memory errors.
+
+Streaming caches the full response before yielding JSONL records. It prefers
+``$XDG_CACHE_HOME/varvis-connector`` (default: ``~/.cache/varvis-connector``), which
+usually uses disk rather than RAM. If cache creation fails, it logs a warning and
+uses the system temporary directory. Temporary files are removed after use.
+An unset, empty, or relative ``XDG_CACHE_HOME`` selects ``~/.cache``. Ensure the selected
+filesystem has room for one full decoded response; cache write failures abort the command.
+Each analysis uses one annotations request and is processed in argument order.
+
+Each output line is an independent object containing integer ``analysis_id`` and variant
+fields keyed by column ID (falling back to the column title or ``col_<index>``).
+Streaming output has no outer analysis-ID mapping or ``header``/``data`` envelope.
+``--output`` selects the destination; ``--output-indent`` is ignored in streaming mode
+so each record stays on one line. Logs and cache fallback warnings go to stderr when
+records go to stdout.
+
+For example, write variants from two analyses to a JSONL file:
+
+.. code-block:: bash
+
+    varvis_connector get-snv-annotations --stream 37813 37814 --output variants.jsonl
 
 For output formatting options see :ref:`output_options` below.
 

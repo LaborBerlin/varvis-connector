@@ -59,6 +59,7 @@ The ``VarvisClient`` constructor accepts the following parameters:
 * ``read_timeout`` (float, optional): Response-read timeout in seconds. When set with or without ``connect_timeout``, phase-specific timeouts are used.
 * ``backoff_factor_seconds`` (float, optional): Backoff factor for API request and session recovery retries in seconds. Default is 0.5 seconds. Request retry delays use full jitter, chosen uniformly between zero and ``backoff_factor_seconds * 2 ** (retry_number - 1)``; zero disables delays. Shared session recovery uses deterministic exponential backoff.
 * ``backoff_max_tries`` (int, optional): Maximum attempts per API request and per shared session recovery. Default is 5.
+* ``download_chunk_size`` (int, optional): Bytes read per file-download chunk. Default is 5242880 (5 MiB). SNV streaming has its own ``chunk_size`` argument.
 * ``download_pool_size`` (int, optional): Number of cached download connection pools. Default is 0, which uses the parallel download worker count.
 * ``download_pool_max_size`` (int, optional): Maximum connections retained per download pool. Default is 0, which uses the parallel download worker count.
 * ``download_backoff_factor_seconds`` (float, optional): Independent backoff factor for download retries with full jitter. Default is 0.5 seconds; zero disables delays.
@@ -100,7 +101,35 @@ Streaming SNV Annotations
 
 For large whole-exome sequencing (WES) or whole-genome sequencing (WGS) analyses, loading the complete SNV annotations eagerly into memory using :meth:`~varvis_connector.VarvisClient.get_snv_annotations` can consume hundreds of megabytes or gigabytes of RAM.
 
-To stream SNV annotations incrementally with constant, low memory overhead (< 2 MB peak RSS for raw streaming):
+Choose a streaming mode according to when the header is available and where the response should be stored:
+
+.. list-table:: SNV streaming modes
+   :header-rows: 1
+   :widths: 25 35 40
+
+   * - Mode
+     - Storage
+     - First row available
+   * - Default raw lists
+     - Incremental parser buffers
+     - During the HTTP transfer
+   * - Supplied ``header``
+     - Incremental parser buffers
+     - During the HTTP transfer; supports dictionaries and filters
+   * - ``allow_buffering=True`` without a header
+     - All rows in RAM
+     - After the trailing header is parsed
+   * - ``stream_to_tempfile=True``
+     - Full response in a temporary file
+     - After the transfer and header scan; supports dictionaries and filters
+
+Varvis normally sends ``data`` before ``header``. Dictionary output and filtering require
+a supplied header, row buffering, or temporary-file caching. Fetching a header separately
+and then iterating makes two HTTP requests; temporary-file mode uses one response.
+Calling ``get_snv_annotation_header()`` alone can still transfer and scan almost the entire
+payload when the header is last, although it discards rows as it reads them.
+
+To stream SNV annotations incrementally:
 
 .. code-block:: python
 
@@ -111,6 +140,10 @@ To stream SNV annotations incrementally with constant, low memory overhead (< 2 
     # Stream variants as dictionaries with zero buffering by providing the header up front
     header = client.get_snv_annotation_header(analysis_id=37813)
     for variant in client.iter_snv_annotations(analysis_id=37813, as_dict=True, header=header):
+        print(variant["Gene"], variant["Chr"], variant["Pos"])
+
+    # cache one response to discover the trailing header without buffering rows in RAM
+    for variant in client.iter_snv_annotations(analysis_id=37813, as_dict=True, stream_to_tempfile=True):
         print(variant["Gene"], variant["Chr"], variant["Pos"])
 
     # Stream variants with column header discovered at stream end (compact row buffering)
@@ -125,6 +158,39 @@ To stream SNV annotations incrementally with constant, low memory overhead (< 2 
         target_coordinates={("chr7", 140753336)},
     ):
         print("Filtered variant:", variant)
+
+Temporary-file streaming stores each response under ``$XDG_CACHE_HOME/varvis-connector``,
+or ``~/.cache/varvis-connector`` when ``XDG_CACHE_HOME`` is unset, empty, or relative.
+User cache directories are usually disk-backed, unlike system temporary directories
+that may use RAM. If the cache directory or file cannot be created, streaming logs a
+warning and uses the system temporary directory. Filesystem backing is not checked.
+Temporary files are removed when iteration finishes, fails, or the generator is closed.
+Allow enough free storage for the full decoded HTTP response. Cache write failures propagate;
+they do not trigger another download or a switch to another directory. A supplied ``header``
+takes precedence over the cached header for row mapping. Temporary-file mode resolves the
+header before yielding rows even when ``allow_buffering=True``, so it avoids row buffering.
+
+Dictionary keys use each column's ``id``, falling back to ``title`` and then ``col_<index>``.
+Gene filters ignore case; coordinate filters accept chromosome names with or without ``chr``
+and use 1-based positions. When both filters are supplied, a row must match both.
+Filters run locally and do not reduce the downloaded response size.
+
+If you stop iteration early, explicitly close the generator to release the HTTP response
+and temporary file promptly. ``contextlib.closing`` handles this even when the loop exits early:
+
+.. code-block:: python
+
+    from contextlib import closing
+
+    # close streaming resources after reading the first variant
+    with closing(client.iter_snv_annotations(37813, as_dict=True, stream_to_tempfile=True)) as variants:
+        for variant in variants:
+            print(variant)
+            break
+
+``header_callback`` receives the response header when the row-parsing pass reaches it.
+With a trailing header and no row buffering, this happens after the rows have been yielded;
+closing the iterator early can prevent the callback from running.
 
 Header Inspection
 ~~~~~~~~~~~~~~~~~
@@ -145,6 +211,9 @@ to the same host. By default, both the cached pool count and the connections ret
 pool use ``max_parallel_downloads``. Override these with ``download_pool_size`` and
 ``download_pool_max_size`` when constructing the client. The session closes after all
 download workers finish.
+These settings control connection reuse. They do not limit concurrent workers; use
+``max_parallel_downloads`` to control concurrency. Download chunk sizes are controlled by
+``download_chunk_size`` independently of SNV streaming.
 
 Download request retries use a separate budget and backoff from API requests and session
 recovery. With the defaults, a download request has up to three attempts, with random

@@ -351,10 +351,27 @@ To handle large payloads efficiently:
 - **Streaming modes:**
   - `as_dict=False` (default): Yields each variant as a raw `list[Any]` immediately over the wire in constant memory (< 2 MB peak RSS).
   - `as_dict=True` with `header`: Resolves column names dynamically and yields variants as `dict[str, Any]` in constant memory (< 2 MB peak RSS).
-  - `as_dict=True` with `allow_buffering=True`: Buffers raw row tuples in memory while streaming, parses the trailing header at the end of the stream, and yields dictionary records lazily (peak memory < 35 MB on 182 MB WES payloads).
+  - `allow_buffering=True` without a supplied or cached header: Buffers all raw row lists in memory, parses the trailing header, and then yields filtered lists or dictionaries. Memory scales with the full row set.
+- **Temporary-file streaming:** `stream_to_tempfile=True` caches one HTTP response, discovers its header from the cache, then rewinds to stream rows. An `ExitStack` closes the response and temporary file on completion, exceptions, or explicit generator closure; argument validation happens before acquiring resources. Temporary files prefer `$XDG_CACHE_HOME/varvis-connector`, using `~/.cache/varvis-connector` when the variable is unset, empty, or relative. The application cache directory is created with mode `0700`. User caches usually use disk storage, while system temporary directories may use RAM; filesystem backing is not inspected. Cache directory or file creation failures trigger a warning and fallback to the system temporary directory. Write failures propagate without restarting the download. Cached streams use the binary file interface, including the temporary-file wrappers returned on Windows. Raw-row overloads retain their list iterator return type with temporary-file caching enabled.
 - **Filtering:** Supports `target_genes` (case-insensitive gene symbols) and `target_coordinates` (chrom and 1-based pos tuples). Dynamic column indices are discovered from header IDs via `resolve_header_indices()` to tolerate panel variations.
 - **Header inspection:** `get_snv_annotation_header()` streams the payload until the header definition is encountered, parses the `SnvAnnotationHeaderItem` models, and terminates the connection early.
 - **CLI integration:** `varvis_connector get-snv-annotations --stream` streams variants as newline-delimited JSON (JSONL) records containing `analysis_id` alongside variant fields.
+
+Temporary-file mode finishes the full transfer and, if no header was supplied, scans the cached
+header before yielding its first row, then parses rows lazily from the rewound file. It avoids
+row buffering even with `allow_buffering=True`. A supplied header controls row mapping, while `header_callback` reports
+the actual response header during the row-parsing pass; early generator closure can skip the
+callback. Callers that stop early must explicitly close the generator, for example with
+`contextlib.closing`. Header-only inspection discards rows but can still transfer nearly the
+whole response when the header is last. Fetching the header separately and then iterating
+requires two annotations requests; temporary-file iteration requires one.
+
+Dictionary keys use column IDs, then titles, then `col_<index>` fallbacks. Coordinate filters
+normalize chromosome case and optional `chr` prefixes and compare 1-based positions. Gene
+and coordinate filters combine with AND and run locally without reducing network traffic.
+The CLI processes analyses sequentially and always uses temporary-file mode for `--stream`.
+Its JSONL records have no outer analysis-ID mapping or header/data envelope, and
+`--output-indent` is ignored. Cache write failures propagate and abort the CLI command.
 
 #### `request()`
 
@@ -657,6 +674,8 @@ The repository has a strong test surface.
   CLI parsing, environment fallback, command behavior, write commands, downloads, and request command behavior.
 - `tests/test_log.py`
   Logging configuration behavior.
+- `tests/test_snv_streaming.py`
+  Incremental parsing through `stream_snv_json_from_request_or_buffer`, header discovery, row formatting, and filtering. Temporary-file tests cover binary files and Windows-style wrappers, UTF-8 chunk boundaries, empty data, supplied-header precedence, single-response reuse, lazy cached reads, filters, callbacks, argument validation, and cleanup on exhaustion, closure, and parsing, network, or filesystem errors. CLI streaming tests use data-first payloads and verify cache locations, request counts, fallback warnings without JSONL contamination, and help text. Cache-selection tests isolate XDG and home defaults and cover missing home directories, directory creation failures, file creation failures, and failure of both preferred and fallback storage.
 
 ### Mocking strategy
 
