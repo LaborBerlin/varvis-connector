@@ -2,7 +2,7 @@
 SNV annotations streaming parser module for Varvis API responses.
 
 Provides incremental, low-memory streaming of large 2D variant arrays directly
-from HTTP response streams using standard library JSON decoding.
+from HTTP responses or binary files using standard library JSON decoding.
 
 Copyright (C) 2026 Labor Berlin – Charité Vivantes GmbH
 
@@ -20,7 +20,8 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 import codecs
 import json
 from collections.abc import Iterator, Sequence
-from typing import Any
+from typing import Any, BinaryIO, cast
+
 import requests
 
 from .errors import VarvisError
@@ -85,8 +86,8 @@ def resolve_header_indices(header: Sequence[Any]) -> dict[str, int]:
     return indices
 
 
-def stream_snv_json_payload(
-    resp: requests.Response,
+def stream_snv_json_from_request_or_buffer(
+    input_stream: requests.Response | BinaryIO,
     chunk_size: int = 65536,
     metadata_out: dict[str, Any] | None = None,
 ) -> Iterator[list[Any]]:
@@ -96,9 +97,11 @@ def stream_snv_json_payload(
     Parses the response stream in a single pass with constant memory overhead. Handles
     arbitrary key ordering in the root JSON object (including payloads where 'data' precedes
     'header'). Populates metadata_out with non-data keys as they are encountered.
+    Binary input is read from its current position without rewinding. UTF-8 characters
+    split across chunks are decoded incrementally. The caller owns closing the input.
 
-    :param resp: Streaming requests.Response object.
-    :param chunk_size: Read chunk size in bytes for the HTTP stream.
+    :param input_stream: HTTP response or readable binary file, including temporary-file wrappers.
+    :param chunk_size: Read chunk size in bytes for the HTTP response or binary file.
     :param metadata_out: Optional dictionary to collect metadata fields such as 'header'.
     :return: An iterator yielding individual variant row lists.
     :raises VarvisError: If the payload is malformed or terminates prematurely.
@@ -108,7 +111,10 @@ def stream_snv_json_payload(
     buffer = ""
     pos = 0
 
-    chunk_iter = resp.iter_content(chunk_size=chunk_size)
+    if isinstance(input_stream, requests.Response):
+        input_iter = input_stream.iter_content(chunk_size=chunk_size)
+    else:
+        input_iter = None
 
     # fetch next available chunk from stream into buffer
     def fetch_more() -> bool:
@@ -118,15 +124,23 @@ def stream_snv_json_payload(
             buffer = buffer[pos:]
             pos = 0
         while True:
-            try:
-                chunk = next(chunk_iter)
-            except StopIteration:
-                return False
+            if input_iter is None:
+                # read binary streams including temporary-file wrappers
+                chunk = cast(BinaryIO, input_stream).read(chunk_size)
+            else:
+                try:
+                    chunk = next(input_iter)
+                except StopIteration:
+                    return False
+
             if chunk:
                 decoded = utf8_decoder.decode(chunk, final=False)
                 if decoded:
                     buffer += decoded
                     return True
+
+            if input_iter is None and (not chunk or len(chunk) < chunk_size):
+                return False
 
     # ensure buffer has at least required characters past pos
     def ensure_chars(count: int = 1) -> bool:

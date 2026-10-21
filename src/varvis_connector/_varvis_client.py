@@ -22,12 +22,13 @@ import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, Future, as_completed
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from json import JSONDecodeError
 from pathlib import Path
 from fnmatch import fnmatchcase
 from urllib.parse import quote, urlsplit
-from typing import Type, TypeVar, Callable, Any, overload, Literal
+from typing import Type, TypeVar, Callable, Any, BinaryIO, overload, Literal
 from collections.abc import Collection, Iterator, Sequence
 
 import requests
@@ -39,7 +40,7 @@ from urllib3.util.retry import Retry
 
 from ._log import default_logger
 from .errors import VarvisError, VarvisTimeoutError, VarvisTransportError
-from ._snv_stream_parser import stream_snv_json_payload, resolve_header_indices
+from ._snv_stream_parser import stream_snv_json_from_request_or_buffer, resolve_header_indices
 from .models import (
     SnvAnnotationData,
     SnvAnnotationHeaderItem,
@@ -439,7 +440,7 @@ class VarvisClient:
 
     @property
     def logged_in(self) -> bool:
-        """Check if the user is logged in."""
+        """Read local session and CSRF status under the session lock without contacting the server."""
         with self._session_lock:
             return self._session is not None and self._loggedin_csrf is not None
 
@@ -607,6 +608,8 @@ class VarvisClient:
 
         This method sends an HTTP GET request to the annotations endpoint and parses only the header
         metadata, discarding the variant data rows on the fly to avoid excessive memory consumption.
+        A trailing header still requires transferring and scanning the preceding rows. The response
+        is closed before returning, and subsequent row iteration requires a separate request.
 
         :param analysis_id: The unique identifier of the analysis.
         :return: A list of `SnvAnnotationHeaderItem` objects defining the annotation columns.
@@ -620,16 +623,8 @@ class VarvisClient:
             stream=True,
         )
 
-        metadata: dict[str, Any] = {}
         try:
-            # consume variant data rows until header metadata is parsed
-            for _ in stream_snv_json_payload(resp, metadata_out=metadata):
-                if "header" in metadata:
-                    break
-            raw_header = metadata.get("header")
-            if raw_header is None:
-                raise VarvisError(f"Header missing in annotations response for analysis {analysis_id}")
-            return [SnvAnnotationHeaderItem.model_validate(item) for item in raw_header]
+            return self._get_snv_annotation_header_from_resp_or_filebuffer(resp)
         finally:
             resp.close()
 
@@ -645,6 +640,7 @@ class VarvisClient:
         chunk_size: int = 65536,
         allow_buffering: bool = False,
         header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
+        stream_to_tempfile: bool = False,
     ) -> Iterator[list[Any]]: ...
 
     @overload
@@ -659,6 +655,7 @@ class VarvisClient:
         chunk_size: int = 65536,
         allow_buffering: bool = False,
         header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
+        stream_to_tempfile: bool = False,
     ) -> Iterator[dict[str, Any]]: ...
 
     @overload
@@ -673,6 +670,7 @@ class VarvisClient:
         chunk_size: int = 65536,
         allow_buffering: bool = False,
         header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
+        stream_to_tempfile: bool = False,
     ) -> Iterator[list[Any]] | Iterator[dict[str, Any]]: ...
 
     def iter_snv_annotations(
@@ -686,36 +684,83 @@ class VarvisClient:
         chunk_size: int = 65536,
         allow_buffering: bool = False,
         header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None = None,
+        stream_to_tempfile: bool = False,
     ) -> Iterator[list[Any]] | Iterator[dict[str, Any]]:
         """
         Streams SNV annotations row-by-row for a given analysis to prevent memory exhaustion.
 
-        Streams the HTTP response directly and yields variant annotations as they arrive over the wire.
+        Streams the HTTP response directly by default; temporary-file mode caches the full response first.
         Because the Varvis API serializes variant data before column headers, yielding dictionaries
         or filtering by coordinates/genes requires either an explicit header sequence or setting
-        `allow_buffering=True`.
+        `allow_buffering=True` or `stream_to_tempfile=True`. Resources are closed on completion,
+        failure, or explicit generator closure. Close the generator explicitly when stopping early.
+        Temporary-file mode makes one HTTP request and completes the transfer before yielding
+        rows, scanning the cache for a header if none was supplied. It avoids row buffering
+        even when `allow_buffering=True`.
+
+        Recommended parameter combinations:
+
+        - For raw rows without filters, leave both `allow_buffering=False` and
+          `stream_to_tempfile=False`. Rows arrive during the transfer with low memory overhead
+          and no temporary-file I/O.
+        - For dictionaries or filters with a known `header`, also leave both flags False.
+          This streams immediately with low memory overhead. Fetching the header separately
+          with `get_snv_annotation_header()` requires an additional request and can transfer
+          nearly the entire payload before finding the trailing header.
+        - For dictionaries or filters without a known header on large analyses, use
+          `stream_to_tempfile=True` and `allow_buffering=False`. This uses one response and
+          keeps row memory bounded, but requires storage for the full response, extra file
+          reads and writes, and completion of the transfer and header scan before the first row.
+        - For smaller responses that fit comfortably in RAM, use `allow_buffering=True` and
+          `stream_to_tempfile=False` without a header. This avoids temporary-file I/O and uses
+          one response, but retains every row in memory and delays all output until the header
+          is parsed. Filtering does not reduce the memory needed for these buffered rows.
+
+        Setting both flags True is supported but provides no advantage over temporary-file
+        mode alone: the cached header takes precedence and no row buffering occurs. Likewise,
+        `allow_buffering=True` has no effect when `header` is supplied. Temporary-file mode
+        still caches the full response with a supplied header or raw-row output, so direct
+        streaming is usually preferable in those cases.
+
+        Temporary files prefer $XDG_CACHE_HOME/varvis-connector, defaulting to
+        ~/.cache/varvis-connector, because user caches are usually disk-backed while system
+        temporary directories may use RAM. If cache creation fails, the system temporary
+        directory is used with a warning; filesystem backing is not checked. An unset, empty,
+        or relative XDG_CACHE_HOME selects ~/.cache. Cache write failures propagate without fallback.
 
         :param analysis_id: The unique identifier of the analysis.
-        :param as_dict: If True, yields each row as a dictionary mapped to column header names or IDs.
-        :param header: Optional sequence of column header descriptors or names.
-        :param target_genes: Optional collection of gene symbols to filter variants by.
-        :param target_coordinates: Optional collection of (chromosome, position) tuples to filter variants by.
-        :param chunk_size: Read chunk size in bytes for the HTTP stream. Defaults to 64 KB.
-        :param allow_buffering: If True and as_dict=True without header, buffers raw rows until the trailing
-            header is parsed at the end of the stream, then yields dictionaries lazily.
-        :param header_callback: Optional callback invoked with the parsed header once reached in the stream.
+        :param as_dict: If True, yields dictionaries keyed by column ID, then title, then col_<index>.
+        :param header: Optional column descriptors or names, taking precedence over the response header.
+        :param target_genes: Optional case-insensitive gene symbols to retain using local filtering.
+        :param target_coordinates: Optional (chromosome, 1-based position) tuples to retain using local
+            filtering. Chromosomes may include a chr prefix. Both filters must match when supplied together.
+        :param chunk_size: Read chunk size in bytes for the HTTP stream and cached rows. Defaults to 64 KiB.
+        :param allow_buffering: If True without a supplied or cached header, buffers all raw rows in memory
+            until the trailing header is parsed, then yields filtered lists or dictionaries. Avoids
+            temporary-file I/O at the cost of memory proportional to the complete row set and delayed
+            output. Prefer this for small responses; it has no effect with a supplied header or
+            `stream_to_tempfile=True`.
+        :param header_callback: Optional callback invoked with the response header when the row-parsing pass
+            reaches it. Early generator closure may prevent invocation, including in temporary-file mode.
+        :param stream_to_tempfile: If True, caches the response in a temporary file and reads its header
+            if none was supplied before streaming rows from the same file. Prefer this with
+            `allow_buffering=False` for large responses requiring dictionaries or filters without a known
+            header. Bounds row memory usage but requires full-response storage and file I/O, and delays
+            output until the transfer and any required header scan finish.
         :return: An iterator yielding individual variant rows as lists or dictionaries.
-        :raises ValueError: If as_dict=True without header and allow_buffering=False, or if filters require header.
+        :raises ValueError: If dictionaries or filters require a header without buffering or temporary-file caching.
         :raises VarvisError: If the Varvis API responds with an error or the payload terminates prematurely.
+        :raises OSError: If temporary-file creation fails in both locations or cache I/O fails.
         """
-        if as_dict and header is None and not allow_buffering:
+        # validate arguments before acquiring resources
+        if as_dict and header is None and not allow_buffering and not stream_to_tempfile:
             raise ValueError(
                 "as_dict=True requires 'header' to stream with zero buffering because 'data' precedes 'header' "
                 "in the Varvis API response. Provide 'header', use get_snv_annotation_header() first, or pass "
                 "allow_buffering=True."
             )
 
-        if (target_genes or target_coordinates) and header is None and not allow_buffering:
+        if (target_genes or target_coordinates) and header is None and not allow_buffering and not stream_to_tempfile:
             raise ValueError(
                 "Filtering by target_genes or target_coordinates requires 'header' to filter during streaming "
                 "with zero buffering. Provide 'header', use get_snv_annotation_header() first, or pass "
@@ -723,16 +768,49 @@ class VarvisClient:
             )
 
         self.logger.info("Streaming SNV annotations for analysis %d (as_dict=%s)", analysis_id, as_dict)
-        resp = self._send_request(
-            "GET",
-            f"analysis/{analysis_id}/annotations",
-            handle_http_errors={400: "Analysis not found for the given ID."},
-            stream=True,
-        )
 
-        try:
+        # close the response and optional cache on failure, completion, or generator close
+        with ExitStack() as stack:
+            resp = stack.enter_context(
+                self._send_request(
+                    "GET",
+                    f"analysis/{analysis_id}/annotations",
+                    handle_http_errors={400: "Analysis not found for the given ID."},
+                    stream=True,
+                )
+            )
+            input_stream: requests.Response | BinaryIO = resp
+
+            # cache the response and resolve its header before streaming rows
+            if stream_to_tempfile:
+                # prefer the user cache to avoid keeping large responses on ram-backed system temp storage
+                try:
+                    cache_home = os.getenv("XDG_CACHE_HOME")
+                    cache_dir = Path(cache_home) if cache_home else Path.home() / ".cache"
+                    if not cache_dir.is_absolute():
+                        cache_dir = Path.home() / ".cache"
+                    cache_dir /= "varvis-connector"
+                    cache_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+                    tempcache = stack.enter_context(tempfile.TemporaryFile(dir=cache_dir))
+                except (OSError, RuntimeError) as exc:
+                    self.logger.warning(
+                        "Could not create an SNV temporary file in the user cache: %s. "
+                        "Falling back to the system temporary directory, which may be RAM-backed.",
+                        exc,
+                    )
+                    tempcache = stack.enter_context(tempfile.TemporaryFile())
+                for chunk in resp.iter_content(chunk_size=chunk_size):
+                    tempcache.write(chunk)
+
+                tempcache.seek(0)
+                if header is None:
+                    header = self._get_snv_annotation_header_from_resp_or_filebuffer(tempcache)
+                tempcache.seek(0)
+                input_stream = tempcache
+
+            # yield rows while the required resources remain open
             yield from self._stream_snv_annotations_generator(
-                resp=resp,
+                resp_or_filebuffer=input_stream,
                 as_dict=as_dict,
                 header=header,
                 target_genes=target_genes,
@@ -740,13 +818,12 @@ class VarvisClient:
                 chunk_size=chunk_size,
                 allow_buffering=allow_buffering,
                 header_callback=header_callback,
+                stream_to_tempfile=stream_to_tempfile,
             )
-        finally:
-            resp.close()
 
     def _stream_snv_annotations_generator(
         self,
-        resp: requests.Response,
+        resp_or_filebuffer: requests.Response | BinaryIO,
         as_dict: bool,
         header: Sequence[Any] | None,
         target_genes: Collection[str] | None,
@@ -754,6 +831,7 @@ class VarvisClient:
         chunk_size: int,
         allow_buffering: bool,
         header_callback: Callable[[list[SnvAnnotationHeaderItem]], None] | None,
+        stream_to_tempfile: bool,
     ) -> Iterator[Any]:
         """
         Internal generator yielding filtered SNV annotations incrementally from the response stream.
@@ -761,14 +839,15 @@ class VarvisClient:
         Handles upfront or buffered header resolution, applies case-insensitive gene symbol
         and genomic coordinate filtering, and formats rows as raw lists or dictionaries.
 
-        :param resp: Active streaming HTTP response.
+        :param resp_or_filebuffer: Active streaming HTTP response or readable binary file.
         :param as_dict: Whether to emit dictionary records mapped to column names.
         :param header: Optional upfront header descriptors.
         :param target_genes: Optional set of gene symbols to retain.
         :param target_coordinates: Optional set of (chrom, pos) tuples to retain.
-        :param chunk_size: HTTP read chunk size in bytes.
+        :param chunk_size: HTTP or binary-file read chunk size in bytes.
         :param allow_buffering: Whether to buffer rows when header is trailing.
         :param header_callback: Optional callback invoked when header is parsed.
+        :param stream_to_tempfile: Whether the caller cached the response and resolved its header before iteration.
         :return: Generator yielding lists or dictionaries.
         :raises ValueError: If target filters cannot resolve necessary column indices from header.
         """
@@ -832,7 +911,9 @@ class VarvisClient:
 
         # stream with zero buffering when header is known or buffering not requested
         if header is not None or not allow_buffering:
-            for row in stream_snv_json_payload(resp, chunk_size=chunk_size, metadata_out=metadata):
+            for row in stream_snv_json_from_request_or_buffer(
+                resp_or_filebuffer, chunk_size=chunk_size, metadata_out=metadata
+            ):
                 if matches_filters(row, gene_idx, chr_idx, pos_idx):
                     if as_dict and col_keys is not None:
                         yield dict(zip(col_keys, row))
@@ -846,7 +927,9 @@ class VarvisClient:
         else:
             # buffer rows when header needs to be discovered at stream end
             buffered_rows: list[list[Any]] = []
-            for row in stream_snv_json_payload(resp, chunk_size=chunk_size, metadata_out=metadata):
+            for row in stream_snv_json_from_request_or_buffer(
+                resp_or_filebuffer, chunk_size=chunk_size, metadata_out=metadata
+            ):
                 buffered_rows.append(row)
 
             raw_header = metadata.get("header") or []
@@ -876,6 +959,29 @@ class VarvisClient:
                         yield dict(zip(col_keys, row))
                     else:
                         yield row
+
+    def _get_snv_annotation_header_from_resp_or_filebuffer(
+        self, resp_or_filebuffer: requests.Response | BinaryIO
+    ) -> list[SnvAnnotationHeaderItem]:
+        """
+        Read and validate the annotation header from the current stream position.
+
+        Rows before the header are discarded. The caller owns closing the HTTP response or
+        binary file and rewinding a cached file before a subsequent row-parsing pass.
+
+        :param resp_or_filebuffer: Active HTTP response or readable binary file.
+        :return: Validated annotation column descriptors.
+        :raises VarvisError: If the header is missing or the payload terminates prematurely.
+        """
+        metadata: dict[str, Any] = {}
+        # consume variant data rows until header metadata is parsed
+        for _ in stream_snv_json_from_request_or_buffer(resp_or_filebuffer, metadata_out=metadata):
+            if "header" in metadata:
+                break
+        raw_header = metadata.get("header")
+        if raw_header is None:
+            raise VarvisError("Header missing in annotations response")
+        return [SnvAnnotationHeaderItem.model_validate(item) for item in raw_header]
 
     def get_cnv_target_results(
         self,
@@ -1575,6 +1681,8 @@ class VarvisClient:
         Requests share a pooled session and retry transport failures up to ``download_max_retries``
         times, with exponential backoff and full jitter based on ``download_backoff_factor_seconds``.
         Interrupted response bodies are not retried.
+        Pool sizes default to the worker count and control retained connections rather than
+        worker concurrency. The pooled session closes after all workers finish.
 
         :param urls_and_targets: A dictionary where keys are URLs pointing to files to download and
             values are their respective output file paths where the downloaded files should be stored.
@@ -1909,6 +2017,13 @@ class VarvisClient:
         including workers whose forced-logout responses arrive after recovery finishes.
         Explicit logout invalidates the session's generation and wakes waiting workers
         with a shared failure instead of allowing further login attempts.
+
+        Login retries use deterministic exponential backoff and a budget separate from HTTP
+        request attempts. Waiters hold neither client lock while waiting for the outcome.
+
+        :param state: The invalidated session record whose recovery outcome is shared.
+        :return: The replacement authenticated session record.
+        :raises VarvisError: If the shared login attempt budget is exhausted.
         """
         # elect one recovery owner while keeping the outcome attached to the old session
         with self._recovery_lock:

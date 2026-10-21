@@ -301,7 +301,7 @@ class _GetSnvAnnotations(_AutoLoginCmdBase):
 
     @classmethod
     def set_up_arguments(cls, argparser: argparse.ArgumentParser) -> None:
-        """Set up command-line arguments for get-snv-annotations."""
+        """Set up get-snv-annotations arguments with guidance on storage for streaming."""
         argparser.add_argument(
             "analysis_ids",
             metavar="analysis-ids",
@@ -311,12 +311,20 @@ class _GetSnvAnnotations(_AutoLoginCmdBase):
         argparser.add_argument(
             "--stream",
             action="store_true",
-            help="Stream variants row-by-row as newline-delimited JSON (JSONL) to prevent memory spikes.",
+            help=(
+                "Stream variants row-by-row as newline-delimited JSON (JSONL) to prevent memory spikes. "
+                "First cache the full response in $XDG_CACHE_HOME/varvis-connector "
+                "(default: ~/.cache/varvis-connector), which usually uses disk rather than RAM. "
+                "If cache creation fails, use the system temporary directory with a warning."
+            ),
         )
         cls._set_arguments_for_fileoutput(argparser)
 
     def run(self) -> None:
-        """Execute the get-snv-annotations command."""
+        """Execute the get-snv-annotations command.
+
+        Streaming prefers user-cache storage because system temporary directories may use RAM.
+        """
         super().run()
 
         if self.parsed_args.stream:
@@ -335,7 +343,9 @@ class _GetSnvAnnotations(_AutoLoginCmdBase):
 
                 try:
                     # stream variants for analysis
-                    for variant in self.client.iter_snv_annotations(a_id, as_dict=True, allow_buffering=True):
+                    for variant in self.client.iter_snv_annotations(
+                        a_id, as_dict=True, allow_buffering=False, stream_to_tempfile=True
+                    ):
                         record = {"analysis_id": a_id, **variant}
                         self.parsed_args.output.write(json.dumps(record) + "\n")
                     any_success = True
