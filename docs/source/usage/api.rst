@@ -179,6 +179,11 @@ header before yielding rows even when ``allow_buffering=True``, so it avoids row
 Dictionary keys use each column's ``id``, falling back to ``title`` and then ``col_<index>``.
 Gene filters ignore case; coordinate filters accept chromosome names with or without ``chr``
 and use 1-based positions. When both filters are supplied, a row must match both.
+Scalar cells and array-valued annotations are supported. Gene IDs in arrays are translated
+through the Gene column's ``dataDictionary``, and a match on any gene retains the row.
+For dictionary-backed genes, supply full header descriptors rather than column names alone,
+or let buffering or temporary-file mode discover them. Coordinate arrays use their first
+chromosome and position values. Filtering preserves the original values in yielded rows.
 Filters run locally and do not reduce the downloaded response size.
 
 If you stop iteration early, explicitly close the generator to release the HTTP response
