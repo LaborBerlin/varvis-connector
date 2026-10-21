@@ -28,6 +28,7 @@ from typing import Any, ClassVar, Type, Callable
 import json
 
 from pydantic import BaseModel, ValidationError
+from pydantic_core import to_jsonable_python
 import requests
 
 from varvis_connector.models import (
@@ -112,42 +113,24 @@ class _CmdBase(ABC):
         serialize_modeldata: bool = True,
         stdout_info_message: str | None = None,
     ) -> None:
-        def recursive_model_to_json(
-            d: BaseModel | dict[str, Any] | list | str | float | int | None,
-        ) -> BaseModel | dict[str, Any] | list | str | float | int | None:
-            if isinstance(d, BaseModel):
-                return d.model_dump(mode="json")
-            elif isinstance(d, list):
-                return [recursive_model_to_json(v) for v in d]
-            elif isinstance(d, dict):
-                # keys have to be strings in JSON
-                return {str(k): recursive_model_to_json(v) for k, v in d.items()}
-            else:
-                return d
+        """Write JSON output, converting models on demand without copying the result container."""
+        # reject empty result containers for commands that require retrieved data
+        if serialize_modeldata and not isinstance(data, BaseModel) and not allow_empty_data and len(data) == 0:
+            self.logger.error("Data retrieval failed for all requests. No data to write.")
+            exit(1)
 
-        serializable_data: Any
-
-        if serialize_modeldata:
-            if isinstance(data, BaseModel):
-                serializable_data = data.model_dump(mode="json")
-            else:
-                if not allow_empty_data and len(data) == 0:
-                    self.logger.error("Data retrieval failed for all requests. No data to write.")
-                    exit(1)
-
-                serializable_data = recursive_model_to_json(data)
-        else:
-            serializable_data = data
-
+        # report the output destination
         if self.parsed_args.output.name == "<stdout>" and stdout_info_message:
             self.logger.info(stdout_info_message)
         elif self.parsed_args.output.name != "<stdout>":
             self.logger.info(f'Writing output to file "{self.parsed_args.output.name}"')
 
+        # convert each model only when the JSON writer reaches it
         json.dump(
-            serializable_data,
+            data,
             self.parsed_args.output,
             indent=self.parsed_args.output_indent or None,
+            default=(lambda value: to_jsonable_python(value, by_alias=False)) if serialize_modeldata else None,
         )
 
     def run(self) -> None:

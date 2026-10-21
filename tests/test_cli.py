@@ -14,7 +14,9 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 :author: Markus Konrad <markus.konrad@laborberlin.com>
 """
 
+import argparse
 import json
+import logging
 import os
 import random
 import sys
@@ -30,7 +32,7 @@ from polyfactory.factories.pydantic_factory import ModelFactory
 
 import varvis_connector
 from varvis_connector import VarvisClient
-from varvis_connector._cli import VarvisCLI
+from varvis_connector._cli import VarvisCLI, _CmdBase
 from varvis_connector.__main__ import main
 from varvis_connector.errors import VarvisError
 from varvis_connector.models import (
@@ -139,6 +141,37 @@ class VirtualPanelDataFactory(ModelFactory):
 class VirtualPanelUpdateDataFactory(ModelFactory):
     __random_seed__ = POLYFACTORY_RANDOM_SEED
     __model__ = VirtualPanelUpdateData
+
+
+@pytest.mark.parametrize("factory", [AnalysisItemFactory, PendingCnvDataFactory])
+@pytest.mark.parametrize("output_indent", [None, 2])
+@pytest.mark.parametrize("container", ["model", "list", "dict"])
+def test_write_file_output_serializes_models_on_demand(factory, container, output_indent):
+    """Preserve JSON output while passing the original result container to the writer."""
+    # include nested models, dates, integer keys, and plain JSON values
+    model = factory.build()
+    model_json = model.model_dump(mode="json")
+    data, expected = {
+        "model": (model, model_json),
+        "list": ([model, model, None, "value", 3], [model_json, model_json, None, "value", 3]),
+        "dict": (
+            {12: [model, {"nested": model}], "empty": []},
+            {"12": [model_json, {"nested": model_json}], "empty": []},
+        ),
+    }[container]
+    output = StringIO()
+    output.name = "<stdout>"
+    cmd = _CmdBase(
+        logger=logging.getLogger(__name__),
+        client=mock.Mock(spec=VarvisClient),
+        parsed_args=argparse.Namespace(output=output, output_indent=output_indent),
+    )
+
+    # ensure serialization starts with the original container instead of a prebuilt copy
+    with mock.patch("varvis_connector._cli.json.dump", wraps=json.dump) as dump:
+        cmd._write_file_output(data)
+    assert dump.call_args.args[0] is data
+    assert output.getvalue() == json.dumps(expected, indent=output_indent)
 
 
 @pytest.fixture()
