@@ -521,10 +521,13 @@ The CLI is designed for shell pipelines and scripting:
 
 - structured data goes to stdout or a file
 - logs go to stderr when needed
-- model instances are recursively converted to JSON
+- `json.dump` traverses the original result container and converts model instances on demand with
+  `pydantic_core.to_jsonable_python`, preserving Pydantic JSON serialization for dates and nested models
 - empty result sets are sometimes considered an error and sometimes allowed, depending on the command
 
 The command layer explicitly distinguishes those cases with `allow_empty_data`.
+Output serialization retains a temporary JSON-compatible representation for the current model,
+without allocating a duplicate dictionary/list tree for the entire batch of results.
 
 ### Input model for write commands
 
