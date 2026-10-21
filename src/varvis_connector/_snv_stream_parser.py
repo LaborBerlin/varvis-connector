@@ -15,10 +15,12 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 :author: Bernt Popp <bernt.popp@laborberlin.com>
+:author: Markus Konrad <markus.konrad@laborberlin.com>
 """
 
 import codecs
 import json
+import re
 from collections.abc import Iterator, Sequence
 from typing import Any, BinaryIO, cast
 
@@ -28,6 +30,11 @@ from .errors import VarvisError
 
 # buffer compaction threshold in characters
 _BUFFER_COMPACTION_THRESHOLD = 65536
+
+# locate value boundaries without scanning ordinary string content in Python
+_CONTAINER_SPECIAL = re.compile(r'[\[\]{}"]')
+_STRING_SPECIAL = re.compile(r'["\\]')
+_SCALAR_DELIMITER = re.compile(r"[ \t\r\n,\]}]")
 
 
 def resolve_header_indices(header: Sequence[Any]) -> dict[str, int]:
@@ -94,7 +101,9 @@ def stream_snv_json_from_request_or_buffer(
     """
     Streams 2D variant row arrays incrementally from a Varvis SNV JSON response.
 
-    Parses the response stream in a single pass with constant memory overhead.
+    Decodes complete values directly and scans incomplete values incrementally before retrying once.
+    Memory usage depends on the largest row or metadata value, plus collected metadata.
+    Values spanning chunks are retained as fragments and joined once before decoding.
     Numeric metadata is decoded only when a delimiter confirms that its token is complete.
     Handles arbitrary key ordering in the root JSON object (including payloads where 'data' precedes
     'header'). Populates metadata_out with non-data keys as they are encountered.
@@ -159,6 +168,93 @@ def stream_snv_json_from_request_or_buffer(
             if pos < len(buffer) or not fetch_more():
                 break
 
+    # collect complete keys, rows, and metadata without repeatedly decoding their prefixes
+    def read_value(context: str) -> Any:
+        """Decode a value, scanning across chunks before retrying an incomplete prefix once."""
+        nonlocal buffer, pos
+        if not ensure_chars(1):
+            raise VarvisError(f"Unexpected EOF while parsing {context}")
+
+        # keep complete values on the JSON decoder's fast path and confirm scalar delimiters
+        scalar = buffer[pos] not in '[{"'
+        try:
+            value, end = decoder.raw_decode(buffer, pos)
+            if not scalar or (end < len(buffer) and buffer[end] in " \t\r\n,]}"):
+                pos = end
+                return value
+        except json.JSONDecodeError:
+            pass
+
+        # retain boundary state and text fragments for the current value
+        closers: list[str] = []
+        in_string = False
+        escaped = False
+        fragments: list[str] = []
+        scan = pos
+        complete = False
+        while not complete:
+            while scan < len(buffer):
+                # an escape consumes the next character even across a chunk boundary
+                if escaped:
+                    scan += 1
+                    escaped = False
+                    continue
+
+                pattern = _SCALAR_DELIMITER if scalar else _STRING_SPECIAL if in_string else _CONTAINER_SPECIAL
+                match = pattern.search(buffer, scan)
+                if match is None:
+                    scan = len(buffer)
+                    break
+                scan = match.start()
+                if scalar:
+                    complete = True
+                    break
+
+                # track strings and nested containers while leaving syntax validation to JSONDecoder
+                char = buffer[scan]
+                scan += 1
+                if in_string:
+                    if char == "\\":
+                        escaped = True
+                    else:
+                        in_string = False
+                        complete = not closers
+                elif char == '"':
+                    in_string = True
+                elif char in "[{":
+                    closers.append("]" if char == "[" else "}")
+                elif not closers or char != closers.pop():
+                    raise VarvisError(f"Malformed JSON while parsing {context}: mismatched closing bracket")
+                else:
+                    complete = not closers
+                if complete:
+                    break
+
+            if not complete:
+                # release consumed input and keep fragments without copying the accumulated prefix
+                fragments.append(buffer[pos:scan])
+                buffer = ""
+                pos = scan = 0
+                if not fetch_more():
+                    raise VarvisError(f"Unexpected EOF while parsing {context}")
+
+        # join fragmented values once and reject trailing invalid characters inside the boundary
+        if fragments:
+            fragments.append(buffer[pos:scan])
+            text = "".join(fragments)
+        else:
+            text = buffer
+        start = 0 if fragments else pos
+        end = len(text) if fragments else scan
+        try:
+            value, decoded_end = decoder.raw_decode(text, start)
+            if decoded_end != end:
+                raise VarvisError(f"Malformed JSON while parsing {context}: invalid value")
+        except json.JSONDecodeError as error:
+            raise VarvisError(f"Malformed JSON while parsing {context}: {error.msg}") from error
+        pos = scan
+        return value
+
     # ensure root object starts with opening brace
     skip_whitespace()
     if not ensure_chars(1) or buffer[pos] != "{":
@@ -175,13 +271,9 @@ def stream_snv_json_from_request_or_buffer(
             break
 
         # decode object key string
-        while True:
-            try:
-                key, pos = decoder.raw_decode(buffer, pos)
-                break
-            except json.JSONDecodeError:
-                if not fetch_more():
-                    raise VarvisError("Unexpected EOF while parsing JSON object key") from None
+        key = read_value("JSON object key")
+        if not isinstance(key, str):
+            raise VarvisError("Malformed JSON: expected a string object key")
 
         skip_whitespace()
         if not ensure_chars(1) or buffer[pos] != ":":
@@ -204,14 +296,7 @@ def stream_snv_json_from_request_or_buffer(
                     break
 
                 # decode single variant row array
-                while True:
-                    try:
-                        row, end_idx = decoder.raw_decode(buffer, pos)
-                        pos = end_idx
-                        break
-                    except json.JSONDecodeError:
-                        if not fetch_more():
-                            raise VarvisError("Unexpected EOF while parsing row array") from None
+                row = read_value("row array")
 
                 if not isinstance(row, list):
                     raise VarvisError(f"Expected list for variant row, got {type(row).__name__}")
@@ -230,21 +315,9 @@ def stream_snv_json_from_request_or_buffer(
                     raise VarvisError(f"Expected ',' or ']' in 'data' array, found '{buffer[pos]}'")
         else:
             # decode metadata value
-            while True:
-                try:
-                    val, end_idx = decoder.raw_decode(buffer, pos)
-                    # wait for a delimiter before accepting split numbers or exponents
-                    if isinstance(val, (int, float)) and (end_idx == len(buffer) or buffer[end_idx] not in " \t\r\n,}"):
-                        if not fetch_more():
-                            raise VarvisError(f"Unexpected EOF while parsing value for key '{key}'")
-                        continue
-                    pos = end_idx
-                    if metadata_out is not None:
-                        metadata_out[key] = val
-                    break
-                except json.JSONDecodeError:
-                    if not fetch_more():
-                        raise VarvisError(f"Unexpected EOF while parsing value for key '{key}'") from None
+            val = read_value(f"value for key '{key}'")
+            if metadata_out is not None:
+                metadata_out[key] = val
 
         skip_whitespace()
         if ensure_chars(1) and buffer[pos] == ",":
