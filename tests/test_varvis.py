@@ -14,6 +14,8 @@ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 :author: Markus Konrad <markus.konrad@laborberlin.com>
 """
 
+from collections.abc import Generator
+from contextlib import closing
 from dataclasses import fields
 import logging
 import os
@@ -45,6 +47,7 @@ from varvis_connector._varvis_client import _validate_download_filename
 from varvis_connector.errors import VarvisError
 from varvis_connector.models import (
     SnvAnnotationData,
+    SnvAnnotationHeaderItem,
     CnvTargetResults,
     PendingCnvData,
     QCCaseMetricsData,
@@ -81,8 +84,9 @@ def _get_varvis_instance(init_data):
     return v
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def varvis_init_data():
+    """Read playground credentials and connection settings from the loaded environment."""
     env_vars = [f"VARVIS_TEST_PLAYGROUND_{s}" for s in ("URL", "USER", "PASSWORD")]
     init_data: list[str | bool | None] = [os.getenv(var) for var in env_vars]
 
@@ -111,6 +115,20 @@ def varvis(varvis_init_data):
     yield v
 
     v.logout()
+
+
+@pytest.fixture(scope="module", params=[7, 61], ids=["analysis-7", "analysis-61"])
+def playground_snv_analysis(varvis_init_data, request):
+    """Share a live client and eager reference payload for each playground SNV analysis."""
+    # reuse one authenticated session and one reference fetch across the parameter matrix
+    client = _get_varvis_instance(varvis_init_data)
+    try:
+        reference = client.get_snv_annotations(request.param)
+        assert reference.data
+        assert reference.header
+        yield request.param, client, reference
+    finally:
+        client.logout()
 
 
 @pytest.fixture()
@@ -383,6 +401,208 @@ def test_get_snv_annotations(varvis, analysis_id, expect_error):
         assert res.data
         assert res.header
         assert not res.thresholdViolated
+
+
+def test_get_snv_annotation_header(playground_snv_analysis):
+    """Read the live annotation header and compare every column with eager retrieval."""
+    # a separate streaming request must preserve header ordering and all model fields
+    analysis_id, client, reference = playground_snv_analysis
+    header = client.get_snv_annotation_header(analysis_id)
+    assert header
+    assert all(isinstance(item, SnvAnnotationHeaderItem) for item in header)
+    assert header == reference.header
+
+
+@pytest.mark.parametrize(
+    "as_dict, header_format, filter_mode, chunk_size, allow_buffering, stream_to_tempfile",
+    [
+        pytest.param(False, "none", "none", 65536, False, False, id="raw-direct"),
+        pytest.param(True, "models", "gene", 1024, False, False, id="model-header-gene"),
+        pytest.param(False, "dicts", "coordinate", 65536, False, False, id="dict-header-coordinate"),
+        pytest.param(True, "none", "both", 1024, True, False, id="buffered-combined-filters"),
+        pytest.param(False, "none", "gene", 65536, False, True, id="tempfile-discovered-header"),
+        pytest.param(True, "dicts", "both", 1024, True, True, id="tempfile-supplied-header"),
+        pytest.param(True, "none", "none", 65536, False, False, id="missing-dictionary-header"),
+        pytest.param(False, "none", "coordinate", 1024, False, False, id="missing-filter-header"),
+    ],
+)
+def test_iter_snv_annotations(
+    playground_snv_analysis,
+    monkeypatch,
+    tmp_path,
+    as_dict,
+    header_format,
+    filter_mode,
+    chunk_size,
+    allow_buffering,
+    stream_to_tempfile,
+):
+    """Cover each streaming parameter value with representative live cases and independently filtered eager rows."""
+    # exercise absent headers and metadata-bearing representations using real annotation columns
+    analysis_id, client, reference = playground_snv_analysis
+    keys = [item.id or item.title or f"col_{index}" for index, item in enumerate(reference.header)]
+    header = {
+        "none": None,
+        "models": reference.header,
+        "dicts": [item.model_dump() for item in reference.header],
+    }[header_format]
+    monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path))
+
+    # derive matching gene and coordinate targets from the playground's array-valued cells
+    gene_index = keys.index("Gene")
+    chr_index = keys.index("Chr")
+    pos_index = keys.index("Pos")
+    first = reference.data[0]
+    dictionary = reference.header[gene_index].dataDictionary
+    assert dictionary is not None
+    gene = dictionary[str(first[gene_index][0])]
+    chromosome = str(first[chr_index][0])
+    position = int(first[pos_index][0])
+    use_gene = filter_mode in {"gene", "both"}
+    use_coordinate = filter_mode in {"coordinate", "both"}
+
+    # expected matches use raw gene IDs and coordinates rather than the streaming filter implementation
+    gene_ids = {str(key) for key, symbol in dictionary.items() if symbol == gene}
+    expected_rows = [
+        row
+        for row in reference.data
+        if (not use_gene or any(str(value) in gene_ids for value in row[gene_index]))
+        and (not use_coordinate or (str(row[chr_index][0]), int(row[pos_index][0])) == (chromosome, position))
+    ]
+    assert expected_rows
+    expected = [dict(zip(keys, row, strict=True)) for row in expected_rows] if as_dict else expected_rows
+
+    # missing headers must be rejected when dictionaries or filters cannot discover them without buffering
+    rows = client.iter_snv_annotations(
+        analysis_id,
+        as_dict=as_dict,
+        header=header,
+        target_genes=[gene.lower()] if use_gene else None,
+        target_coordinates=[(f"CHR{chromosome}", position)] if use_coordinate else None,
+        chunk_size=chunk_size,
+        allow_buffering=allow_buffering,
+        stream_to_tempfile=stream_to_tempfile,
+    )
+    assert isinstance(rows, Generator)
+    with closing(rows):
+        if (
+            header is None
+            and not allow_buffering
+            and not stream_to_tempfile
+            and (as_dict or use_gene or use_coordinate)
+        ):
+            with pytest.raises(ValueError, match="requires|Filtering"):
+                list(rows)
+        else:
+            assert list(rows) == expected
+
+
+@pytest.mark.parametrize("as_dict", [False, True], ids=["lists", "dicts"])
+def test_iter_snv_annotations_header_names(playground_snv_analysis, as_dict):
+    """Accept column names alone when no gene dictionary is needed for filtering."""
+    # names preserve row mapping but cannot translate the playground's gene IDs into symbols
+    analysis_id, client, reference = playground_snv_analysis
+    keys = [item.id for item in reference.header]
+    expected = [dict(zip(keys, row, strict=True)) for row in reference.data] if as_dict else reference.data
+    rows = client.iter_snv_annotations(analysis_id, as_dict=as_dict, header=keys)
+    assert isinstance(rows, Generator)
+    with closing(rows):
+        assert list(rows) == expected
+
+
+@pytest.mark.parametrize("empty_filters", [[], (), set()], ids=["lists", "tuples", "sets"])
+def test_iter_snv_annotations_empty_filters(playground_snv_analysis, empty_filters):
+    """Treat empty filter collections as an unfiltered direct stream."""
+    # empty filters must not require a header, buffering, or temporary storage
+    analysis_id, client, reference = playground_snv_analysis
+    rows = client.iter_snv_annotations(analysis_id, target_genes=empty_filters, target_coordinates=empty_filters)
+    assert isinstance(rows, Generator)
+    with closing(rows):
+        assert list(rows) == reference.data
+
+
+@pytest.mark.parametrize(
+    "target_genes, target_coordinates",
+    [
+        (["__NO_MATCHING_PLAYGROUND_GENE__"], None),
+        (None, [("chr0", 0)]),
+        (["__NO_MATCHING_PLAYGROUND_GENE__"], [("chr0", 0)]),
+    ],
+    ids=["gene", "coordinate", "both"],
+)
+def test_iter_snv_annotations_no_matching_filters(playground_snv_analysis, target_genes, target_coordinates):
+    """Return an empty iterator when valid filters match no playground variants."""
+    # unmatched filters are a successful result rather than an API or parsing error
+    analysis_id, client, reference = playground_snv_analysis
+    rows = client.iter_snv_annotations(
+        analysis_id, header=reference.header, target_genes=target_genes, target_coordinates=target_coordinates
+    )
+    assert isinstance(rows, Generator)
+    with closing(rows):
+        assert list(rows) == []
+
+
+def test_iter_snv_annotations_filters_combine_with_and(playground_snv_analysis):
+    """Require both filters even when each separately matches real playground rows."""
+    # choose a gene from the first variant and a coordinate belonging to a different gene
+    analysis_id, client, reference = playground_snv_analysis
+    keys = [item.id for item in reference.header]
+    gene_index, chr_index, pos_index = (keys.index(key) for key in ("Gene", "Chr", "Pos"))
+    first_id = reference.data[0][gene_index][0]
+    dictionary = reference.header[gene_index].dataDictionary
+    assert dictionary is not None
+    gene = dictionary[str(first_id)]
+    other = next(row for row in reference.data if first_id not in row[gene_index])
+    chromosome, position = str(other[chr_index][0]), int(other[pos_index][0])
+    assert all(
+        first_id not in row[gene_index]
+        for row in reference.data
+        if (str(row[chr_index][0]), int(row[pos_index][0])) == (chromosome, position)
+    )
+
+    # an OR implementation would incorrectly return matches from either target
+    rows = client.iter_snv_annotations(
+        analysis_id, header=reference.header, target_genes={gene}, target_coordinates={(chromosome, position)}
+    )
+    assert isinstance(rows, Generator)
+    with closing(rows):
+        assert list(rows) == []
+
+
+@pytest.mark.parametrize("filter_kind", ["genes", "coordinates"])
+@pytest.mark.parametrize("collection_type", [list, tuple, set], ids=["lists", "tuples", "sets"])
+def test_iter_snv_annotations_multiple_filter_targets(playground_snv_analysis, filter_kind, collection_type):
+    """Match any target within gene or coordinate collections against real variants."""
+    # derive two targets and their expected union from the eager reference data
+    analysis_id, client, reference = playground_snv_analysis
+    keys = [item.id for item in reference.header]
+    gene_index, chr_index, pos_index = (keys.index(key) for key in ("Gene", "Chr", "Pos"))
+    dictionary = reference.header[gene_index].dataDictionary
+    assert dictionary is not None
+    chosen = [reference.data[0], reference.data[-1]]
+    genes = {dictionary[str(row[gene_index][0])] for row in chosen}
+    gene_ids = {str(key) for key, symbol in dictionary.items() if symbol in genes}
+    coordinates = {(str(row[chr_index][0]), int(row[pos_index][0])) for row in chosen}
+    expected = [
+        row
+        for row in reference.data
+        if (
+            any(str(value) in gene_ids for value in row[gene_index])
+            if filter_kind == "genes"
+            else (str(row[chr_index][0]), int(row[pos_index][0])) in coordinates
+        )
+    ]
+
+    # collection types affect neither matching nor original row contents
+    rows = client.iter_snv_annotations(
+        analysis_id,
+        header=reference.header,
+        target_genes=collection_type(genes) if filter_kind == "genes" else None,
+        target_coordinates=collection_type(coordinates) if filter_kind == "coordinates" else None,
+    )
+    assert isinstance(rows, Generator)
+    with closing(rows):
+        assert list(rows) == expected
 
 
 @pytest.mark.parametrize(

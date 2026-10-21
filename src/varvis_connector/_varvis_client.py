@@ -720,8 +720,10 @@ class VarvisClient:
         :param as_dict: If True, yields dictionaries keyed by column ID, then title, then col_<index>.
         :param header: Optional column descriptors or names, taking precedence over the response header.
         :param target_genes: Optional case-insensitive gene symbols to retain using local filtering.
+            Array-valued gene IDs are resolved through the Gene column's dataDictionary.
         :param target_coordinates: Optional (chromosome, 1-based position) tuples to retain using local
-            filtering. Chromosomes may include a chr prefix. Both filters must match when supplied together.
+            filtering. Chromosomes may include a chr prefix. Coordinate cells may be scalars or
+            arrays whose first value is the chromosome or position. Both filters must match when supplied together.
         :param chunk_size: Read chunk size in bytes for the HTTP stream and cached rows. Defaults to 64 KiB.
         :param allow_buffering: If True without a supplied or cached header, buffers all raw rows in memory
             until the trailing header is parsed, then yields filtered lists or dictionaries. Avoids
@@ -826,6 +828,8 @@ class VarvisClient:
 
         Handles upfront or buffered header resolution, applies case-insensitive gene symbol
         and genomic coordinate filtering, and formats rows as raw lists or dictionaries.
+        Array-valued gene IDs are translated through the header dictionary; coordinate arrays
+        use their first value. Scalar annotations remain supported without changing yielded rows.
 
         :param resp_or_filebuffer: Active streaming HTTP response or readable binary file.
         :param as_dict: Whether to emit dictionary records mapped to column names.
@@ -852,6 +856,17 @@ class VarvisClient:
         chr_idx: int | None = None
         pos_idx: int | None = None
 
+        # translate dictionary-backed gene IDs after either upfront or buffered header discovery
+        def get_gene_symbols(columns: Sequence[Any], index: int | None) -> dict[str, str]:
+            """Resolve gene IDs to normalized symbols from model or dictionary headers."""
+            if index is None:
+                return {}
+            item = columns[index]
+            dictionary = item.get("dataDictionary") if isinstance(item, dict) else getattr(item, "dataDictionary", None)
+            return {str(key): str(value).strip().upper() for key, value in (dictionary or {}).items()}
+
+        gene_symbols: dict[str, str] = {}
+
         if header is not None:
             col_keys = []
             for i, item in enumerate(header):
@@ -866,6 +881,7 @@ class VarvisClient:
             gene_idx = indices.get("gene")
             chr_idx = indices.get("chr")
             pos_idx = indices.get("pos")
+            gene_symbols = get_gene_symbols(header, gene_idx)
 
             # validate that required filter columns exist in provided header
             if genes_filter is not None and gene_idx is None:
@@ -875,20 +891,31 @@ class VarvisClient:
                     "Could not resolve chromosome ('chr') or position ('pos') column index from header for target_coordinates filter."
                 )
 
-        # helper function to match variant against filters
+        # match scalar annotations and the array-valued cells returned by the playground
         def matches_filters(row: list[Any], g_idx: int | None, c_idx: int | None, p_idx: int | None) -> bool:
+            """Match normalized gene symbols and coordinates while preserving original row values."""
             if genes_filter is not None:
                 if g_idx is None or g_idx >= len(row):
                     return False
-                row_gene = str(row[g_idx]).strip().upper()
-                if row_gene not in genes_filter:
+                values = row[g_idx] if isinstance(row[g_idx], list) else [row[g_idx]]
+                if not any(
+                    gene_symbols.get(str(value), str(value).strip().upper()) in genes_filter for value in values
+                ):
                     return False
             if coords_filter is not None:
                 if c_idx is None or p_idx is None or c_idx >= len(row) or p_idx >= len(row):
                     return False
-                row_chr = str(row[c_idx]).strip().lower().removeprefix("chr")
+                chromosome = row[c_idx]
+                position = row[p_idx]
+                if isinstance(chromosome, list):
+                    chromosome = chromosome[0] if chromosome else None
+                if isinstance(position, list):
+                    position = position[0] if position else None
+                if position is None:
+                    return False
+                row_chr = str(chromosome).strip().lower().removeprefix("chr")
                 try:
-                    row_pos = int(row[p_idx])
+                    row_pos = int(position)
                 except (ValueError, TypeError):
                     return False
                 if (row_chr, row_pos) not in coords_filter:
@@ -930,6 +957,7 @@ class VarvisClient:
             gene_idx = indices.get("gene")
             chr_idx = indices.get("chr")
             pos_idx = indices.get("pos")
+            gene_symbols = get_gene_symbols(validated_header, gene_idx)
 
             # validate that required filter columns exist in discovered header
             if genes_filter is not None and gene_idx is None:

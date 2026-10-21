@@ -369,6 +369,10 @@ requires two annotations requests; temporary-file iteration requires one.
 Dictionary keys use column IDs, then titles, then `col_<index>` fallbacks. Coordinate filters
 normalize chromosome case and optional `chr` prefixes and compare 1-based positions. Gene
 and coordinate filters combine with AND and run locally without reducing network traffic.
+Filters accept scalar and array-valued cells. Array-valued gene IDs are translated through
+the Gene header's `dataDictionary`; any matching gene retains a row. This requires full
+header descriptors for dictionary-backed genes, rather than column names alone. Coordinate
+arrays use their first chromosome and position values. Yielded rows retain their original cells.
 The CLI processes analyses sequentially and always uses temporary-file mode for `--stream`.
 Its JSONL records have no outer analysis-ID mapping or header/data envelope, and
 `--output-indent` is ignored. Cache write failures propagate and abort the CLI command.
@@ -678,7 +682,15 @@ The repository has a strong test surface.
 ### Test categories
 
 - `tests/test_varvis.py`
-  Client public API behavior.
+  Client public API behavior. Live SNV streaming and header tests use playground analyses 7
+  and 61 with credentials from `VARVIS_TEST_PLAYGROUND_URL`, `VARVIS_TEST_PLAYGROUND_USER`,
+  and `VARVIS_TEST_PLAYGROUND_PASSWORD`. A module-scoped fixture shares one authenticated
+  client and eager reference payload per analysis. Eight representative streaming cases per
+  analysis cover every listed parameter value: list/dictionary output, absent/model/dictionary
+  headers, gene/coordinate/combined filters, 1 KiB and 64 KiB chunks, buffering, temporary-file
+  caching, and invalid parameter combinations. Additional
+  cases cover header names, empty filter collections, and filters with no matches. Expected
+  matches are derived independently from live gene dictionaries and array-valued coordinates.
 - `tests/test_varvis_internal.py`
   Lower-level retry and forced-logout behavior.
 - `tests/test_cli.py`
