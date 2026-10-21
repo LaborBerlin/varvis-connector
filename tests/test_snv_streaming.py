@@ -12,6 +12,7 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
 
 :author: Bernt Popp <bernt.popp@laborberlin.com>
+:author: Markus Konrad <markus.konrad@laborberlin.com>
 """
 
 from collections.abc import Generator
@@ -148,6 +149,95 @@ def test_stream_snv_json_from_request_or_buffer_unexpected_eof():
     resp = _create_mock_streaming_response(b'{"data": [[1, 2], [3, ')
     with pytest.raises(VarvisError):
         list(stream_snv_json_from_request_or_buffer(resp))
+
+
+@pytest.mark.parametrize("use_response", [False, True])
+@pytest.mark.parametrize("chunk_size", [1, 7, 257, 65536])
+def test_stream_snv_json_fragmented_values(use_response, chunk_size):
+    """Preserve nesting, escapes, Unicode, and large keys and values across chunks."""
+    # span compaction thresholds with keys, metadata, and rows containing misleading delimiters
+    text = 'München "]}\\' + "x" * 70000
+    long_key = "key" + "x" * 70000
+    payload = {
+        long_key: {"nested": [text, {"escaped": '\\"[]{}', "value": None}]},
+        "data": [[text, [1, {"nested": [True, False, -1.25e-3]}]], ["last"]],
+        "header": [{"id": "value"}],
+    }
+    raw_bytes = json.dumps(payload, ensure_ascii=False).encode()
+    source = _create_mock_streaming_response(raw_bytes) if use_response else io.BytesIO(raw_bytes)
+    metadata = {}
+
+    # collect only complete values and leave the following rows and metadata intact
+    with source:
+        rows = list(stream_snv_json_from_request_or_buffer(source, chunk_size=chunk_size, metadata_out=metadata))
+    assert rows == payload["data"]
+    assert metadata == {long_key: payload[long_key], "header": payload["header"]}
+
+
+@pytest.mark.parametrize("use_response", [False, True])
+def test_stream_snv_json_large_values_decode_attempts(use_response):
+    """Bound decoding attempts independently of the number of chunks in a value."""
+    # split a long key, nested metadata, and row into hundreds of chunks each
+    long_key = "k" * 100000
+    text = "x" * 100000
+    payload = {long_key: {"nested": [text]}, "data": [[text], ["last"]]}
+    raw_bytes = json.dumps(payload).encode()
+    source = _create_mock_streaming_response(raw_bytes) if use_response else io.BytesIO(raw_bytes)
+    decoder = json.JSONDecoder()
+    metadata = {}
+    with source, mock.patch("varvis_connector._snv_stream_parser.json.JSONDecoder", return_value=decoder):
+        with mock.patch.object(decoder, "raw_decode", wraps=decoder.raw_decode) as decode:
+            assert (
+                list(stream_snv_json_from_request_or_buffer(source, chunk_size=257, metadata_out=metadata))
+                == payload["data"]
+            )
+
+    # each of the five values needs at most an initial attempt and one final decode
+    assert decode.call_count <= 10
+    assert metadata == {long_key: payload[long_key]}
+
+
+@pytest.mark.parametrize("use_response", [False, True])
+@pytest.mark.parametrize("chunk_size", [1, 7, 65536])
+@pytest.mark.parametrize(
+    "raw_bytes",
+    [
+        b'{"data": [[1, {"nested": [2}]]]}',
+        b'{"data": [[1 2]]}',
+        b'{"data": [["invalid\\q"]]}',
+        b'{"data": [["unterminated\\',
+        b'{"data": [], "metadata": {"nested": [1}}',
+        b'{"data": [], "metadata": 1e+}',
+        b'{"data": [], "metadata": truex}',
+        b'{"data": [], "metadata": "unterminated',
+    ],
+)
+def test_stream_snv_json_fragmented_malformed_values(use_response, chunk_size, raw_bytes):
+    """Reject malformed or incomplete nested values regardless of chunk boundaries."""
+    # never publish incomplete metadata when scanning reaches malformed input or EOF
+    source = _create_mock_streaming_response(raw_bytes) if use_response else io.BytesIO(raw_bytes)
+    metadata = {}
+    with source, pytest.raises(VarvisError):
+        list(stream_snv_json_from_request_or_buffer(source, chunk_size=chunk_size, metadata_out=metadata))
+    assert "metadata" not in metadata
+
+
+def test_stream_snv_json_fragmented_row_yields_before_next_value():
+    """Yield a completed fragmented row without reading the next large row."""
+    # make the first row span chunks and keep enough following data to detect eager reads
+    text = "x" * 100000
+    payload = {"data": [[text], [text]], "header": []}
+    raw_bytes = json.dumps(payload).encode()
+    source = io.BytesIO(raw_bytes)
+    rows = stream_snv_json_from_request_or_buffer(source, chunk_size=257)
+    assert isinstance(rows, Generator)
+    try:
+        assert next(rows) == [text]
+        assert source.tell() < len(raw_bytes) - 90000
+        assert list(rows) == [[text]]
+    finally:
+        rows.close()
+        source.close()
 
 
 @pytest.mark.parametrize("use_response", [False, True])
