@@ -19,12 +19,13 @@ import logging
 import os
 import sys
 from abc import ABC
+from contextlib import AbstractContextManager, ExitStack, nullcontext
 from dataclasses import dataclass, fields, MISSING
 import getpass
 from datetime import datetime
 from pathlib import Path
 from types import UnionType
-from typing import Any, ClassVar, Type, Callable
+from typing import Any, ClassVar, Type, Callable, TextIO
 import json
 
 from pydantic import BaseModel, ValidationError
@@ -74,11 +75,12 @@ class _CmdBase(ABC):
 
     @classmethod
     def _set_arguments_for_fileoutput(cls, argparser: argparse.ArgumentParser) -> None:
+        """Register output paths without opening files during argument parsing."""
         argparser.add_argument(
             "--output",
-            type=argparse.FileType("w"),
-            default="-",
-            help="Output JSON file. If not given, output will be printed to stdout.",
+            type=Path,
+            default=Path("-"),
+            help="Output JSON file. If not given or set to '-', output will be printed to stdout.",
         )
         argparser.add_argument("--output-indent", type=int, default=None, help="Output JSON indentation.")
 
@@ -89,12 +91,28 @@ class _CmdBase(ABC):
         input_description: str,
         default: str | None = "-",
     ) -> None:
+        """Register an optional input path, using '-' to select stdin."""
         argparser.add_argument(
             "--input",
-            type=argparse.FileType("r"),
-            default=default,
+            type=Path,
+            default=Path(default) if default is not None else None,
             help=f"{input_description}. If not given, input will be read from stdin.",
         )
+
+    def _read_file_input(self) -> str:
+        """Read the selected UTF-8 input file or stdin without closing stdin."""
+        # open input only when the command actually needs it
+        if self.parsed_args.input == Path("-"):
+            return sys.stdin.read()
+        return self.parsed_args.input.read_text(encoding="utf-8")
+
+    def _open_file_output(self) -> AbstractContextManager[TextIO]:
+        """Open a UTF-8 output file for writing, leaving stdout open when selected."""
+        # defer file creation and truncation until output is ready to write
+        if self.parsed_args.output == Path("-"):
+            return nullcontext(sys.stdout)
+        self.logger.info(f'Writing output to file "{self.parsed_args.output}"')
+        return self.parsed_args.output.open("w", encoding="utf-8")
 
     def _parse_virtual_panel_id(self) -> int | None:
         if isinstance(self.parsed_args.virtual_panel_id, str) and self.parsed_args.virtual_panel_id.lower() == "none":
@@ -113,25 +131,24 @@ class _CmdBase(ABC):
         serialize_modeldata: bool = True,
         stdout_info_message: str | None = None,
     ) -> None:
-        """Write JSON output, converting models on demand without copying the result container."""
+        """Open the output destination when data is ready and serialize models on demand."""
         # reject empty result containers for commands that require retrieved data
         if serialize_modeldata and not isinstance(data, BaseModel) and not allow_empty_data and len(data) == 0:
             self.logger.error("Data retrieval failed for all requests. No data to write.")
             exit(1)
 
-        # report the output destination
-        if self.parsed_args.output.name == "<stdout>" and stdout_info_message:
+        # report optional stdout guidance before writing
+        if self.parsed_args.output == Path("-") and stdout_info_message:
             self.logger.info(stdout_info_message)
-        elif self.parsed_args.output.name != "<stdout>":
-            self.logger.info(f'Writing output to file "{self.parsed_args.output.name}"')
 
-        # convert each model only when the JSON writer reaches it
-        json.dump(
-            data,
-            self.parsed_args.output,
-            indent=self.parsed_args.output_indent or None,
-            default=(lambda value: to_jsonable_python(value, by_alias=False)) if serialize_modeldata else None,
-        )
+        # convert each model only when the JSON writer reaches it and close owned output files
+        with self._open_file_output() as output:
+            json.dump(
+                data,
+                output,
+                indent=self.parsed_args.output_indent or None,
+                default=(lambda value: to_jsonable_python(value, by_alias=False)) if serialize_modeldata else None,
+            )
 
     def run(self) -> None:
         raise NotImplementedError("Subclasses must implement the run() method.")
@@ -206,6 +223,7 @@ class _ArbitraryRequestCmd(_AutoLoginCmdBase):
         cls._set_arguments_for_fileoutput(argparser)
 
     def run(self) -> None:
+        """Send an authenticated request, reading optional input only during execution."""
         super().run()
 
         method = "GET"  # default method
@@ -215,9 +233,9 @@ class _ArbitraryRequestCmd(_AutoLoginCmdBase):
                 break
 
         # check if we have input to process
-        kwargs = {}
+        kwargs: dict[str, Any] = {}
         if self.parsed_args.input is not None:
-            input_data = self.parsed_args.input.read()
+            input_data = self._read_file_input()
             if self.parsed_args.raw_input:
                 self.logger.info("Sending raw input data")
                 self.logger.debug(f"Raw input data:\n{input_data}")
@@ -307,41 +325,42 @@ class _GetSnvAnnotations(_AutoLoginCmdBase):
         """Execute the get-snv-annotations command.
 
         Streaming prefers user-cache storage because system temporary directories may use RAM.
+        Output files are opened only after a record is ready or an empty result succeeds.
         """
         super().run()
 
         if self.parsed_args.stream:
-            # write destination info if file output
-            if self.parsed_args.output.name != "<stdout>":
-                self.logger.info(f'Writing output to file "{self.parsed_args.output.name}"')
+            # open output lazily and close owned files on success, failure, or interruption
+            with ExitStack() as stack:
+                output = None
+                any_success = False
+                for a_id in self.parsed_args.analysis_ids:
+                    try:
+                        a_id = int(a_id)
+                    except ValueError:
+                        self.logger.warning(f'Provided analysis ID "{a_id}" is not an integer.')
+                        continue
 
-            # stream variants line-by-line
-            any_success = False
-            for a_id in self.parsed_args.analysis_ids:
-                try:
-                    a_id = int(a_id)
-                except ValueError:
-                    self.logger.warning(f'Provided analysis ID "{a_id}" is not an integer.')
-                    continue
+                    try:
+                        # stream variants for analysis and open output when its first record is ready
+                        for variant in self.client.iter_snv_annotations(
+                            a_id, as_dict=True, allow_buffering=False, stream_to_tempfile=True
+                        ):
+                            record = {"analysis_id": a_id, **variant}
+                            if output is None:
+                                output = stack.enter_context(self._open_file_output())
+                            output.write(json.dumps(record) + "\n")
+                        any_success = True
+                    except (VarvisError, requests.RequestException) as exc:
+                        self.logger.warning(f"Could not retrieve SNV annotations for analysis ID {a_id}: {exc}")
 
-                try:
-                    # stream variants for analysis
-                    for variant in self.client.iter_snv_annotations(
-                        a_id, as_dict=True, allow_buffering=False, stream_to_tempfile=True
-                    ):
-                        record = {"analysis_id": a_id, **variant}
-                        self.parsed_args.output.write(json.dumps(record) + "\n")
-                    any_success = True
-                except (VarvisError, requests.RequestException) as exc:
-                    self.logger.warning(f"Could not retrieve SNV annotations for analysis ID {a_id}: {exc}")
-
-            # flush output buffer
-            self.parsed_args.output.flush()
-
-            # check if any request succeeded
-            if not any_success:
-                self.logger.error("Data retrieval failed for all requests. No data to write.")
-                exit(1)
+                # preserve existing output on total failure and create an empty file for successful empty results
+                if not any_success:
+                    self.logger.error("Data retrieval failed for all requests. No data to write.")
+                    exit(1)
+                if output is None:
+                    output = stack.enter_context(self._open_file_output())
+                output.flush()
             return
 
         # retrieve snv annotations eagerly
@@ -730,6 +749,7 @@ class _CreateOrUpdatePerson(_AutoLoginCmdBase):
         )
 
     def run(self) -> None:
+        """Create or update a person using explicit arguments or deferred JSON input."""
         super().run()
 
         # first check if data was provided via CLI arguments
@@ -766,7 +786,7 @@ class _CreateOrUpdatePerson(_AutoLoginCmdBase):
         else:
             # if no CLI arguments were given, check if data was provided via stdin or file
             self.logger.debug("Data provided as file or via stdin")
-            json_data = self.parsed_args.input.read()
+            json_data = self._read_file_input()
             try:
                 person_data = PersonUpdateData.model_validate_json(json_data)
             except ValidationError as exc:
@@ -947,6 +967,7 @@ class _CreateOrUpdateVirtualPanelBase(_AutoLoginCmdBase):
         )
 
     def run(self) -> None:
+        """Create or update a panel using explicit arguments or deferred JSON input."""
         super().run()
 
         # first check if data was provided via CLI arguments
@@ -974,7 +995,7 @@ class _CreateOrUpdateVirtualPanelBase(_AutoLoginCmdBase):
             # no CLI arguments were given
             self.logger.debug("Data provided as file or via stdin")
             try:
-                model_data = json.loads(self.parsed_args.input.read())
+                model_data = json.loads(self._read_file_input())
             except json.JSONDecodeError as exc:
                 self.logger.error(f"Error while parsing JSON: {exc}")
                 exit(1)
@@ -1295,7 +1316,7 @@ class VarvisCLI:
     }
 
     def run(self) -> None:
-        """Run the selected command and clean up its client session on every command exit path."""
+        """Run the selected command with deferred file I/O and client cleanup on every exit path."""
         # set up arguments; logging is not available yet, so we capture errors during setup and log them later
         failed_setup_msg = None
         client_config = {}
@@ -1449,6 +1470,7 @@ class VarvisCLI:
         return client_config
 
     def _setup_logging(self) -> None:
+        """Route logs to stderr when structured output is directed to stdout."""
         if self._parsed_args is None:
             raise RuntimeError("_parsed_args must be initialized")
         log_level_label = self._parsed_args.loglevel.upper()
@@ -1459,7 +1481,7 @@ class VarvisCLI:
             -1 if log_level_value == -1 else (logging.ERROR if log_level_value < logging.ERROR else logging.NOTSET)
         )
 
-        if getattr(self._parsed_args, "output", None) is sys.__stdout__ or int(os.getenv("TEST_WRITES_TO_STDOUT", "0")):
+        if getattr(self._parsed_args, "output", None) == Path("-") or int(os.getenv("TEST_WRITES_TO_STDOUT", "0")):
             # in case file output is printed to stdout, we want to log to stderr only
             level_stderr = level_stdout
             level_stdout = -1

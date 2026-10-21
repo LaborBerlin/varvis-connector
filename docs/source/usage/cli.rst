@@ -616,7 +616,15 @@ For output formatting options see :ref:`output_options` below.
 Command output options
 ----------------------
 
-If a command produces structured output, it will be stored as JSON. By default, the output will be written to stdout, but you can also specify an output file using the ``--output`` option:
+If a command produces structured output, it will be stored as JSON. By default, the output will be written to stdout, but you can also specify an output file using the ``--output`` option.
+
+Use ``--output -`` to explicitly select stdout. Input and output files use UTF-8 and are
+opened during command execution, rather than argument parsing. An existing output file
+is preserved if argument parsing, login, or retrieval fails before output starts. Once
+writing starts, a later error can leave partial output. Successful empty streaming results
+produce an empty file. ``--input -`` selects stdin for commands that accept input.
+
+For example:
 
 .. code-block:: bash
 
