@@ -18,6 +18,7 @@ import json
 import os
 import random
 import sys
+import tempfile
 from fnmatch import fnmatchcase
 from io import StringIO
 from typing import Any
@@ -566,6 +567,7 @@ def test_get_snv_annotations(
         ({1: False, 2: True, 3: True}, True),
     ],
 )
+@pytest.mark.parametrize("cache_unavailable", [False, True])
 def test_get_snv_annotations_stream(
     capfd,
     monkeypatch,
@@ -573,8 +575,18 @@ def test_get_snv_annotations_stream(
     varvis_mockapi_with_login,
     analysis_ids_and_expected_data,
     output_to_file,
+    cache_unavailable,
 ):
-    """Test get-snv-annotations CLI command with --stream flag."""
+    """Stream data-first responses as JSONL using one temporary cache per successful analysis."""
+    # isolate user cache selection and simulate an unavailable cache root
+    cache_home = tmp_path / "cache"
+    monkeypatch.setenv("XDG_CACHE_HOME", str(cache_home))
+    if cache_unavailable:
+        cache_home.write_text("not a directory")
+
+    # observe actual cache creation without replacing the streaming implementation
+    create_cache = mock.Mock(wraps=tempfile.TemporaryFile)
+    monkeypatch.setattr("varvis_connector._varvis_client.tempfile.TemporaryFile", create_cache)
     # set up cli args with stream flag
     further_args = ["--stream"] + list(map(str, analysis_ids_and_expected_data.keys()))
     _, output_file = _set_up_cmd_args_and_env_with_output(
@@ -594,6 +606,8 @@ def test_get_snv_annotations_stream(
             has_success = True
             snv_annotation_data = SnvAnnotationDataFactory.build()
             snv_annotation_data_dict = snv_annotation_data.model_dump(mode="json")
+            data = snv_annotation_data_dict.pop("data")
+            snv_annotation_data_dict = {"data": data, **snv_annotation_data_dict}
             varvis_mockapi_with_login.get(
                 MOCK_URL + f"api/analysis/{a_id}/annotations",
                 json=snv_annotation_data_dict,
@@ -631,6 +645,19 @@ def test_get_snv_annotations_stream(
             assert records == expected_records
         else:
             assert expected_records == []
+
+    # each successful analysis uses one cache and every valid id triggers one annotations request
+    expected_call = mock.call() if cache_unavailable else mock.call(dir=cache_home / "varvis-connector")
+    assert create_cache.call_args_list == [expected_call] * sum(
+        bool(value) for value in analysis_ids_and_expected_data.values()
+    )
+    if cache_unavailable and has_success:
+        warning_output = captured.out if output_file else captured.err
+        assert "Falling back to the system temporary directory" in warning_output
+    annotation_requests = [
+        request for request in varvis_mockapi_with_login.request_history if request.url.endswith("/annotations")
+    ]
+    assert len(annotation_requests) == sum(isinstance(a_id, int) for a_id in analysis_ids_and_expected_data)
 
 
 @pytest.mark.parametrize(
