@@ -28,17 +28,13 @@ depsync:
 	uv sync --all-groups --all-extras
 
 # upgrade dependencies: fetch updatable packages, update lockfile, install
-# updates in venv, update pre-commit hooks;
+# updates in venv
 # note: you may need to edit pyproject.toml afterwards to raise mininum
 # dependency version requirements
 # uses dependency cooldown if enabled in pyproject.toml via "exclude-newer"
 depupgrade:
 	uv lock -U
 	uv sync --all-groups --all-extras
-	for t in $(TOOLS); do \
-		uv tool upgrade "$$t"; \
-	done
-	pre-commit autoupdate
 
 # just check for possible updates; is used in dependencies_update.yaml GHA workflow
 depcheck:
@@ -52,6 +48,17 @@ pkgupgrade:
         	exit 1; \
     	fi
 	uv lock --exclude-newer-package $$pkg=false -P $$pkg
+
+# upgrade uv tools and pre-commit hooks
+toolupgrade:
+	for t in $(TOOLS); do \
+		uv tool upgrade "$$t"; \
+	done
+	pre-commit autoupdate
+
+# run GHA workflows linter and check that actions are correctly pinned
+check_actions:
+	npx --yes @kjanat/actionlint@v1.17.0
 
 # fold the readme to 120 chars line length max.
 fold_readme:

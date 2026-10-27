@@ -26,6 +26,9 @@ jobs:
   gitleaks:
     uses: ./.github/workflows/gitleaks.yaml
 
+  actionlint:
+    uses: ./.github/workflows/actionlint.yaml
+
   deps_audit:
     uses: ./.github/workflows/dependencies_audit.yaml
 
@@ -43,7 +46,7 @@ jobs:
     secrets: inherit
 
   build:
-    needs: [gitleaks, deps_audit, codequality, tests]
+    needs: [gitleaks, actionlint, deps_audit, codequality, tests]
     if: |
       always() &&
       needs.gitleaks.result == 'success' &&

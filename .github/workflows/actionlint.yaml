@@ -1,0 +1,37 @@
+# Run actionlint from https://github.com/kjanat/actionlint to check the GitHub Actions workflows
+#
+# Is enabled for this repo and should be triggered on any push or PR for repos that use this workflow.
+#
+# Uses a GH ubuntu runner.
+
+name: Lint GitHub Actions workflows
+on:
+  push:
+  pull_request:
+  workflow_call:
+    inputs:
+      actionlint_tag:
+        description: "Version tag to use for @kjanat/actionlint"
+        required: false
+        type: string
+        default: v1.17.0 # if changed, don't forget to change the default tag in the "gh release download" command below, too
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-slim # single-cpu runner is enough
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: Download and run actionlint
+        env: { GH_TOKEN: "${{ github.token }}", GH_REPO: "kjanat/actionlint" }
+        run: |
+          case "${RUNNER_ARCH}" in
+            X64) asset_arch=amd64 ;;
+            ARM64) asset_arch=arm64 ;;
+            ARM) asset_arch=armv6 ;;
+            X86) asset_arch=386 ;;
+            *) echo "Unsupported runner architecture: ${RUNNER_ARCH}" >&2; exit 1 ;;
+          esac
+          gh release download "${{ inputs.actionlint_tag || 'v1.17.0' }}" --pattern "actionlint_*_${RUNNER_OS,,}_${asset_arch}.tar.gz" --output - | tar -xzf - actionlint
+          ./actionlint -color
