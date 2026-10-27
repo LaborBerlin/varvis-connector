@@ -1,6 +1,6 @@
 ---
 name: update-dependencies
-description: Update all dependencies in the current project, including Python packages in `uv.lock` and pre-commit hook revisions in `.pre-commit-config.yaml`. Use when the user asks to "update dependencies", "update all dependencies", refresh the lockfile, refresh pre-commit hooks, or bring direct dependency minimum versions in `pyproject.toml` up to the versions actually adopted after an update.
+description: Update project dependencies, including Python packages, development tools, pre-commit hooks, and GitHub Actions SHA pins. Use when the user asks to update dependencies, refresh the lockfile or hooks, update action pins, or raise direct dependency minimum versions to the versions adopted after an update.
 ---
 
 # Update Dependencies
@@ -11,31 +11,55 @@ Update this repository's dependencies with the project's own automation, validat
 
 ## Workflow
 
-1. Read `AGENTS.md`, `.agents/research.md`, `pyproject.toml`, `Makefile`, and `.pre-commit-config.yaml` before making changes.
+1. Read `AGENTS.md`, `.agents/research.md`, `pyproject.toml`, `Makefile`, `.pre-commit-config.yaml`, `.github/pinact.yaml`, and affected `.github/workflows/` files before making changes.
 2. Capture the starting state for later reporting:
    - direct dependencies from `pyproject.toml`
    - optional dependencies and dependency groups from `pyproject.toml`
    - pre-commit hook revisions from `.pre-commit-config.yaml`
    - current version pins in `uv.lock` for direct dependencies if needed
-3. Run the project's update command:
+   - GitHub Actions SHA pins and version comments in `.github/workflows/`
+3. Use the targets matching the request. An all-dependencies refresh includes all three:
 
 ```bash
+# update Python packages and synchronize the virtual environment
 make depupgrade
+# upgrade development tools and refresh pre-commit hook revisions
+make toolupgrade
+# refresh GitHub Actions SHA pins
+make update_actions
 ```
 
-1. Inspect which files changed. Expect at least:
+`make depupgrade` does not update tools, hooks, or GitHub Actions. For a request
+limited to one dependency category, run only its target. Python updates use the
+configured uv cooldown; action updates use the seven-day minimum release age in
+`.github/pinact.yaml`. Preserve those settings unless the user requests an exception.
+GitHub Actions checks require pinact on `PATH` and Node.js/npm for npx; if a
+required tool is missing, notify the user so they can install it manually.
+
+4. Inspect which files changed for the requested categories:
    - `uv.lock`
    - `.pre-commit-config.yaml`
    - sometimes `pyproject.toml`
-2. Update minimum versions in `pyproject.toml` for direct dependencies that were actually upgraded.
+   - `.github/workflows/*.yaml` for GitHub Actions updates
+5. Update minimum versions in `pyproject.toml` for direct dependencies that were actually upgraded.
    - Only change direct dependencies already listed in `pyproject.toml`.
    - Do not add or remove dependencies unless the update flow clearly requires it.
    - Keep version specifiers simple and consistent with the file's current style, usually `>=<new_version>`.
-3. Run the full validation flow after the update.
-4. If validation fails, fix small compatibility issues directly.
-5. If a failure is caused by one updated dependency and the fix is too large for the update task, roll back only that dependency update, then rerun validation.
-6. Summarize all dependency changes and any rollback decisions.
-7. Update `.agents/research.md` if the repository-specific dependency update workflow or skill inventory changed in a way future work should know about.
+6. Review action release notes and workflow compatibility. Preserve full commit SHA
+   pins and their version comments. Use `make pin_actions` to pin newly added tagged
+   references. Keep actionlint versions aligned across `Makefile`, the pre-commit
+   hook, and the workflow input default and release-download fallback. Keep pinact
+   workflow input defaults and release-download fallbacks aligned when updating it.
+7. Run the full validation flow after the update.
+8. If validation fails, fix small compatibility issues directly.
+9. If a failure is caused by one updated dependency and the fix is too large for the update task, roll back only that dependency update, then rerun validation.
+10. Summarize all dependency changes and any rollback decisions.
+11. Update `.agents/research.md` to reflect the repository's current dependency tooling and workflow.
+
+GitHub Actions updates are tracked by `pinact_update.yaml`, which opens monthly
+issues using `.github/issue-template-pinact-updates.md` and the `github_actions`
+label. It replaces Dependabot for actions and does not push workflow changes;
+apply suggested updates locally through `make update_actions`.
 
 ## Validation
 
@@ -50,6 +74,7 @@ ruff check
 ruff format
 basedpyright
 bandit -c pyproject.toml -r src/
+make check_actions
 make testall
 make build
 make docs
@@ -102,6 +127,9 @@ uv sync --all-groups --all-extras
 
 If pre-commit hook updates cause the problem and the issue is not worth fixing, revert only the affected hook revision in `.pre-commit-config.yaml` and rerun validation.
 
+For an incompatible GitHub Action update, restore only that action's previous SHA
+and version comment in the affected workflows, then rerun `make check_actions`.
+
 ## Reporting
 
 Always report:
@@ -110,6 +138,7 @@ Always report:
 - point out major-version changes in direct dependencies
 - package updates reflected in `uv.lock`
 - pre-commit hook revision changes
+- GitHub Actions updates, including version comments and SHA pins, and any tool upgrades
 - any fixes made to keep the update
 - any dependency rolled back and why
 - validation commands run and their final outcome
