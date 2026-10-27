@@ -409,6 +409,11 @@ All response models inherit from `BaseModel`. This serves several purposes:
 - keep the CLI JSON serialization predictable through `model_dump(mode="json")`
 - catch upstream response changes early
 
+List-response validation constructs a `TypeAdapter[list[TModel]]` from the runtime
+model class. The dynamic schema expression carries a targeted
+`reportInvalidTypeForm` suppression because Pydantic's `TypeForm` constructor
+annotation expects a statically known type expression.
+
 ### Model characteristics
 
 The model file mixes three categories:
@@ -800,6 +805,9 @@ The project uses:
 - `uv` for environment and dependency management
 - `uv_build` as build backend
 - Pydantic, requests, and tqdm as runtime dependencies
+- runtime minimum versions are Pydantic 2.14.1, requests 2.34.2, and tqdm 4.70.1
+- development minimum versions include coverage 7.16.2, inline-snapshot 0.36.1, and types-requests 2.33.0.20261006
+- documentation dependencies use Python-version markers: Python 3.12 and newer require Sphinx 9.1.1 and sphinx-autodoc-typehints 3.17.2, while older interpreters retain compatible minimums of 8.1.3 and 3.0.0
 - Ruff for linting/formatting
 - basedpyright for type checking
 - Bandit for security linting
@@ -829,7 +837,7 @@ The repository contains workflows for:
 - tests intentionally serialize CI concurrency to reduce load on the Varvis server
 - dependency updates are partially automated through a scheduled workflow that opens an issue, creates a branch, updates `uv.lock`, and pushes a commit
 - `git-cliff` is used both for changelog generation and for conventional-commit enforcement
-- `uv` uses a seven-day dependency cooldown through `exclude-newer`, with a package-specific exception for `urllib3`
+- `uv` uses a seven-day dependency cooldown through `exclude-newer`, with no package-specific exceptions
 - Python dependency refreshes use `make depupgrade`, which runs only `uv lock -U` and `uv sync --all-groups --all-extras`; `make toolupgrade` separately upgrades the tools listed in `Makefile` and runs `pre-commit autoupdate`
 - external GitHub Actions use full commit SHA pins with version comments; `astral-sh/setup-uv` uses `1c37ad07a6a961277cf70c0d37d6f313000f5884` (`v10.3.0`), and GitHub Releases use `softprops/action-gh-release`
 - `make pin_actions` pins tagged action references, `make update_actions` refreshes pins, and `make check_actions` runs actionlint via npx followed by `pinact run --check`; pinact uses the seven-day minimum release age in `.github/pinact.yaml`
@@ -837,7 +845,7 @@ The repository contains workflows for:
 - pinact workflows pass `${{ github.token }}` through `GITHUB_TOKEN`, which authenticates both pinact's API requests and the GitHub CLI's downloads and issue creation
 - local GitHub Actions checks require pinact on `PATH` and Node.js/npm for npx; `make init_dev` does not install them
 - `.agents/skills/update-dependencies/SKILL.md` covers Python packages, development tools and hooks, and GitHub Actions pins through their separate Makefile targets
-- the current pre-commit baseline includes `ruff-pre-commit` and `basedpyright-pre-commit-mirror`
+- the pre-commit baseline includes `ruff-pre-commit` v0.17.3 and `basedpyright-pre-commit-mirror` 1.40.2; standalone uv tools follow the seven-day package cooldown independently of hook revisions
 - gitleaks ignores version-tag push events as a standalone workflow trigger because the release orchestration workflow calls it explicitly for releases
 - pre-commit mirrors the main local quality gates, including Ruff, Bandit, basedpyright, shellcheck, actionlint, a local always-run `pinact-check` hook, and project-local commit/changelog checks
 
