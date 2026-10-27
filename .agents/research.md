@@ -806,6 +806,8 @@ The project uses:
 - pip-audit for dependency vulnerability scanning
 - pre-commit
 - git-cliff for changelog generation and commit message linting
+- actionlint (`@kjanat/actionlint` v1.17.0) for GitHub Actions workflow linting
+- pinact (v5.0.0 in CI) for GitHub Actions SHA pinning and updates
 
 ### CI workflows
 
@@ -815,6 +817,8 @@ The repository contains workflows for:
 - code quality
 - dependency audit
 - scheduled dependency update issue/branch creation
+- GitHub Actions linting and SHA pin checks on push, pull request, and release workflow calls
+- scheduled GitHub Actions update issue creation
 - gitleaks secret scanning
 - build/release orchestration
 - documentation publishing to GitHub Pages
@@ -826,16 +830,26 @@ The repository contains workflows for:
 - dependency updates are partially automated through a scheduled workflow that opens an issue, creates a branch, updates `uv.lock`, and pushes a commit
 - `git-cliff` is used both for changelog generation and for conventional-commit enforcement
 - `uv` uses a seven-day dependency cooldown through `exclude-newer`, with a package-specific exception for `urllib3`
-- dependency refreshes follow `make depupgrade`, which runs `uv lock -U`, `uv sync --all-groups --all-extras`, tool upgrades, and `pre-commit autoupdate`
+- Python dependency refreshes use `make depupgrade`, which runs only `uv lock -U` and `uv sync --all-groups --all-extras`; `make toolupgrade` separately upgrades the tools listed in `Makefile` and runs `pre-commit autoupdate`
+- external GitHub Actions use full commit SHA pins with version comments; `astral-sh/setup-uv` uses `1c37ad07a6a961277cf70c0d37d6f313000f5884` (`v10.3.0`), and GitHub Releases use `softprops/action-gh-release`
+- `make pin_actions` pins tagged action references, `make update_actions` refreshes pins, and `make check_actions` runs actionlint via npx followed by `pinact run --check`; pinact uses the seven-day minimum release age in `.github/pinact.yaml`
+- `pinact_update.yaml` replaces Dependabot for GitHub Actions updates; on the 15th of each month at 08:30 UTC it uses a self-hosted runner to open an issue with the pinact diff, assigned from `.github/CODEOWNERS` and labeled `github_actions`, using `.github/issue-template-pinact-updates.md`; it does not create a branch or push workflow changes
+- pinact workflows pass `${{ github.token }}` through `GITHUB_TOKEN`, which authenticates both pinact's API requests and the GitHub CLI's downloads and issue creation
+- local GitHub Actions checks require pinact on `PATH` and Node.js/npm for npx; `make init_dev` does not install them
+- `.agents/skills/update-dependencies/SKILL.md` covers Python packages, development tools and hooks, and GitHub Actions pins through their separate Makefile targets
 - the current pre-commit baseline includes `ruff-pre-commit` and `basedpyright-pre-commit-mirror`
 - gitleaks ignores version-tag push events as a standalone workflow trigger because the release orchestration workflow calls it explicitly for releases
-- pre-commit mirrors the main local quality gates, including Ruff, Bandit, basedpyright, shellcheck, markdown formatting, and project-local commit/changelog checks
+- pre-commit mirrors the main local quality gates, including Ruff, Bandit, basedpyright, shellcheck, actionlint, a local always-run `pinact-check` hook, and project-local commit/changelog checks
 
 ### Release state
 
 The release workflow is fully responsible for package publication on version tags.
 
-`build_and_release.yaml` runs on tags matching `v*.*.*`. It gates releases with gitleaks and dependency audit for all tags. Non-development tags additionally require code quality and tests. Development tags containing `.dev` can build and publish after the security-oriented gates without running the full code quality and test gate inside the release workflow.
+`build_and_release.yaml` runs on tags matching `v*.*.*`. It gates releases with gitleaks, actionlint, pinact, and dependency audit for all tags. Non-development tags additionally require code quality and tests. Development tags containing `.dev` can build and publish after those four gates without running the full code quality and test gate inside the release workflow.
+
+The build job lists all gate workflows in `needs`. Its explicit `always()` condition
+requires gitleaks, actionlint, pinact, and dependency audit to succeed, while allowing
+code quality and tests to be skipped for development tags.
 
 The build job creates wheel and source distributions with `make build`, derives the package version from the tag name, and uploads the `dist/` directory as a workflow artifact.
 

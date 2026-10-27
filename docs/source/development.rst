@@ -72,6 +72,11 @@ Install `uv <https://docs.astral.sh/uv/>`_, then install all dependencies and re
 
     make init_dev
 
+GitHub Actions checks also require `pinact <https://github.com/suzuki-shunsuke/pinact>`_
+on ``PATH`` and Node.js/npm for the ``npx`` actionlint command. Install these
+separately; ``make init_dev`` does not install them. The pre-commit configuration
+includes actionlint and a local ``pinact-check`` hook that requires pinact.
+
 If you only want to (re-)synchronize the virtual environment with
 ``pyproject.toml`` / ``uv.lock``::
 
@@ -138,15 +143,59 @@ It will then redirect to the GitHub PR page.
 Dependency management
 ---------------------
 
-Upgrade *all* dependencies (update lockfile, sync venv, update pre-commit
-hooks)::
+Upgrade Python dependencies (update ``uv.lock`` and synchronize the virtual
+environment)::
 
     make depupgrade
+
+Review the adopted versions and raise direct dependency minimum versions in
+``pyproject.toml`` as appropriate. Python updates respect the configured
+seven-day cooldown.
+
+Upgrade the development tools listed in ``Makefile`` and refresh pre-commit
+hook revisions separately::
+
+    make toolupgrade
 
 Check whether updates would be available (used by the scheduled dependency
 update workflow)::
 
     make depcheck
+
+GitHub Actions maintenance
+--------------------------
+
+External actions in ``.github/workflows/`` use full commit SHA pins with version
+comments. For example, ``astral-sh/setup-uv`` is pinned to
+``1c37ad07a6a961277cf70c0d37d6f313000f5884`` (``v10.3.0``).
+
+Convert tagged action references to commit SHA pins::
+
+    make pin_actions
+
+Update existing pins to eligible releases::
+
+    make update_actions
+
+Pinact uses ``.github/pinact.yaml``, which sets a minimum release age of seven
+days. Review workflow diffs and any action input or behavior changes before
+integrating updates.
+
+Lint workflows with actionlint and verify their pins with pinact::
+
+    make check_actions
+
+The actionlint command uses ``@kjanat/actionlint@v1.17.0`` via ``npx``. When
+updating actionlint, keep this version, its pre-commit revision, and the
+``actionlint.yaml`` workflow defaults aligned. Pinact workflow version defaults
+and their release-download fallbacks should likewise stay aligned.
+
+``pinact_update.yaml`` checks for action updates monthly on the 15th at 08:30
+UTC. It opens an issue assigned from ``.github/CODEOWNERS`` using
+``.github/issue-template-pinact-updates.md`` and the ``github_actions`` label.
+Apply the suggested updates locally with ``make update_actions`` and submit a
+reviewed PR. This workflow replaces Dependabot for GitHub Actions updates and
+does not push workflow changes itself.
 
 Security: dependency audit
 --------------------------
@@ -183,6 +232,14 @@ Workflows live in ``.github/workflows/``:
 - **``codequality.yaml``**: conventional commits check, ruff format/lint, pyright,
   bandit (Python 3.11 to 3.14).
 - **``gitleaks.yaml``**: credential leak scan on every push/PR.
+- **``actionlint.yaml``**: lint GitHub Actions workflows on push/PR and when
+  called by the release workflow.
+- **``pinact.yaml``**: verify action SHA pins on push/PR and when called by the
+  release workflow.
+- **``pinact_update.yaml``**: monthly GitHub Actions update checks and issue
+  creation.
+- **``dependencies_update.yaml``**: monthly Python dependency update checks,
+  issue creation, and an updated lockfile on a linked branch.
 - **``docs.yaml``**: build the documentation and publish it to GitHub pages.
 - **``build_and_release.yaml``**: orchestrate production releases, including
   running the gate workflows, building the package and then publishing the
