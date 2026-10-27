@@ -139,6 +139,7 @@ def _parse_response_for_model(model_class: Type[TModel], resp: Response, data_fr
 def _parse_response_for_model_list(
     model_class: Type[TModel], resp: Response, data_from_key: str | None = None
 ) -> list[TModel]:
+    """Validate a response list against a model class selected at runtime."""
     if data_from_key:
         # some endpoints return the actual payload in a separate "response" key ...
         data = _jsondata_from_response(resp, data_from_key)
@@ -149,7 +150,8 @@ def _parse_response_for_model_list(
     if not isinstance(data, list):
         raise VarvisError("Response data should be a list")
 
-    model_list_adapter = TypeAdapter(list[model_class])
+    # construct the schema from the runtime model class
+    model_list_adapter = TypeAdapter[list[TModel]](list[model_class])  # pyright: ignore[reportInvalidTypeForm]
 
     try:
         return model_list_adapter.validate_python(data)
