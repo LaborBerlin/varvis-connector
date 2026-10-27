@@ -1,7 +1,11 @@
 Command-Line Interface (CLI)
 ============================
 
-The ``varvis-connector`` package provides a command-line interface (CLI) program called ``varvis_connector``, which allows you to interact with the Varvis API directly from the terminal.
+The ``varvis-connector`` package provides a command-line interface (CLI) program called ``varvis_connector`` for
+interacting with the Varvis API from the terminal. It supports low-memory SNV exports as JSONL using temporary-file
+caching, safe parallel downloads with connection pooling and retries, and configurable connection and read timeouts.
+JSON serialization avoids copying the entire result tree, and output files are opened only when results are ready
+to be written, preserving existing output when argument parsing, login, or retrieval fails before writing starts.
 
 If you want to see examples about what's possible with the CLI in combination with other tools on the command-line, you can skip over to the :ref:`real-world-applications` section.
 

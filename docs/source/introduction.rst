@@ -22,7 +22,11 @@ The ``varvis-connector`` package
    :width: 25%
    :align: right
 
-The ``varvis-connector`` package provides a Python interface for the varvis® API. It includes both a command-line interface (CLI) and a Python package with a client implementation. The package handles authentication, session management, and provides methods to retrieve various types of genomic data including SNV annotations, CNV target results, and CNV segments. It supports environment-based configuration and includes comprehensive error handling.
+The ``varvis-connector`` package provides a Python client and command-line interface (CLI) for the varvis® API.
+Retrieve genomic data including SNV annotations, CNV target results, and CNV segments, process large SNV responses
+with low memory use, and download analysis files safely in parallel. The package handles authentication and
+coordinated session recovery for concurrent requests, with configurable timeouts, retries, and environment-based
+configuration.
 
 Intended Use
 ~~~~~~~~~~~~
@@ -49,12 +53,18 @@ and validation requirements in their jurisdiction and use case.
 Features
 ~~~~~~~~
 
-* Python client for the varvis® API
-* Command-line interface for direct interaction with the API
-* Authentication and session management
-* Methods to retrieve various types of genomic data
-* Environment-based configuration
-* Comprehensive error handling
+* Typed Python client and command-line interface for genomic data retrieval, person records, and virtual panels
+* Low-memory SNV iteration with optional temporary-file caching; CLI JSONL streaming uses caching to avoid holding
+  full responses in RAM (see :doc:`usage/api` and :ref:`cli-get-snv-annotations`)
+* Gene and coordinate filters that support scalar and array-valued SNV annotations
+* Parallel HTTPS downloads with connection pooling, configurable retries with randomized delays, and separate
+  download retry settings
+* Atomic file downloads that preserve existing files on failure, clean up partial transfers, and reject unsafe
+  filenames and conflicting destination paths (see :ref:`cli-download-files`)
+* Thread-safe authentication and coordinated re-login after session invalidation, with bounded shared recovery attempts
+* Separate connection and read timeouts, environment-based configuration, and comprehensive error handling
+* Memory-efficient CLI JSON serialization, with output files opened only when results are ready to be written
+  (see :ref:`output_options`)
 * Support for Python 3.10 and above
 
 Currently covered varvis® API endpoints

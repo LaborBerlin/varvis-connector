@@ -1,7 +1,10 @@
 Python API
 ==========
 
-The ``varvis-connector`` package provides a Python API for interacting with the Varvis API. The main class is ``VarvisClient``, which handles authentication, session management, and provides methods to retrieve various types of genomic data from Varvis.
+The ``varvis-connector`` package provides a typed Python API for interacting with the Varvis API through
+``VarvisClient``. It supports low-memory SNV iteration with optional temporary-file caching, safe parallel downloads
+with connection pooling, and coordinated session recovery for concurrent requests. Separate connection and read
+timeouts and configurable retry settings let you tune the client for large responses and automated workflows.
 
 Basic Usage
 -----------
