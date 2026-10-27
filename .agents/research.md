@@ -782,8 +782,8 @@ The docs are good and materially useful.
 
 ### Main strengths
 
-- `README.md` gives a clear project summary and external docs link
-- `docs/source/introduction.rst` enumerates endpoint coverage explicitly
+- `README.md` and `docs/source/introduction.rst` introduce low-memory SNV processing, pooled and atomic downloads, coordinated session recovery, phase-specific timeouts, and memory-efficient CLI output in their summaries and feature lists
+- `docs/source/introduction.rst` enumerates endpoint coverage explicitly and links feature highlights to the usage guides
 - `docs/source/usage/api.rst` and `docs/source/usage/cli.rst` document both surfaces
 - `docs/source/development.rst` explains workflow, tooling, CI, and upstream Varvis quirks
 - API reference is generated with Sphinx autodoc
