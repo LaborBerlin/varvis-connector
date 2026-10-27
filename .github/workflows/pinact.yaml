@@ -1,0 +1,36 @@
+# Run pinact from https://github.com/suzuki-shunsuke/pinact to check that the GitHub Actions are pinned
+#
+# Is enabled for this repo and should be triggered on any push or PR for repos that use this workflow.
+#
+# Uses a GH ubuntu runner.
+
+name: Check GitHub Actions pins
+on:
+  push:
+  pull_request:
+  workflow_call:
+    inputs:
+      pinact_tag:
+        description: "Version tag to use for @suzuki-shunsuke/pinact"
+        required: false
+        type: string
+        default: v5.0.0 # if changed, don't forget to change the default tag in the "gh release download" command below, too
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-slim # single-cpu runner is enough
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with: { persist-credentials: false }
+      - name: Download and run pinact
+        env:
+          { GITHUB_TOKEN: "${{ github.token }}", GH_REPO: "suzuki-shunsuke/pinact" }
+        run: |
+          case "${RUNNER_ARCH}" in
+            X64) asset_arch=amd64 ;;
+            ARM64) asset_arch=arm64 ;;
+            *) echo "Unsupported runner architecture: ${RUNNER_ARCH}" >&2; exit 1 ;;
+          esac
+          gh release download "${{ inputs.pinact_tag || 'v5.0.0' }}" --pattern "pinact_${RUNNER_OS,,}_${asset_arch}.tar.gz" --output - | tar -xzf - pinact
+          ./pinact run --check -c .github/pinact.yaml
