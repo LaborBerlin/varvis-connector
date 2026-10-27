@@ -1,0 +1,91 @@
+# Reusable workflow to run a GitHub Actions update check via pinact
+#
+# This workflow will check for available updates using pinact. If there are updates, it
+# will create an issue with the information about the updates.
+#
+# This workflow is run every month on the 15th in this repo and can be used by other repos in a similar way.
+#
+# Needs the `issues: write` permissions.
+#
+# Notes:
+#
+# - we could theoretically create a branch with the changes to the workflow files so that these changes could be
+#   directly reviewed and merged; however, changing workflow files within a workflow requires special permissions
+#   that can only be granted with a fine-grained PAT; hence this workflow only informs about possible updates
+# - the github client "gh" must be installed on the self-hosted runner
+# - the `.github/CODEOWNERS` file must exist in the repository
+# - requires a template `.github/issue-template-pinact-updates.md` in the repository
+# - requires the issue label `github_actions` in the repository
+
+name: GitHub Actions updates
+
+on:
+  schedule:
+    # run at 8:30am on the 15th of every month
+    - cron: "30 8 15 * *"
+  workflow_call:
+    inputs:
+      checkout_ref: # git ref to check out
+        required: false
+        type: string
+        default: "main"
+      pinact_tag:
+        description: "Version tag to use for @suzuki-shunsuke/pinact"
+        required: false
+        type: string
+        default: v5.0.0 # if changed, don't forget to change the default tag in the "gh release download" command below, too
+
+jobs:
+  pinact_update:
+    runs-on: self-hosted
+    permissions:
+      contents: read
+      # required for creating an issue
+      issues: write
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.checkout_ref }}
+
+      - name: Download pinact
+        env:
+          { GITHUB_TOKEN: "${{ github.token }}", GH_REPO: "suzuki-shunsuke/pinact" }
+        run: |
+          case "${RUNNER_ARCH}" in
+            X64) asset_arch=amd64 ;;
+            ARM64) asset_arch=arm64 ;;
+            *) echo "Unsupported runner architecture: ${RUNNER_ARCH}" >&2; exit 1 ;;
+          esac
+          gh release download "${{ inputs.pinact_tag || 'v5.0.0' }}" \
+            --pattern "pinact_${RUNNER_OS,,}_${asset_arch}.tar.gz" --output - | tar -xzf - pinact
+
+      - name: Check for GHA updates
+        run: |
+          # pinact --diff exits with 1 when updates are available; other nonzero statuses are errors.
+          pinact_status=0
+          pinact_output=$(./pinact run -c .github/pinact.yaml --update --diff 2>&1) || pinact_status=$?
+          if [ "$pinact_status" -gt 1 ]; then
+            printf '%s\n' "$pinact_output" >&2
+            exit "$pinact_status"
+          fi
+          # remove color codes (cannot be controlled via pinact) and GitHub Actions annotations
+          updates=$(printf '%s\n' "$pinact_output" | sed -r 's/\x1B\[[0-9;]*[mK]//g' | grep -vE '^::\w+' || true)
+          if [ "$pinact_status" -eq 1 ]; then
+            echo "Updates available. Will create an issue."
+
+            # create an issue
+            today=$(date -I)
+            test -f .github/CODEOWNERS || (echo "a CODEOWNERS file must be given"; exit 1)
+            usernames=$(awk '!/^[[:space:]]*(#|$)/ {for (i=2; i<=NF; i++) {sub(/^@/, "", $i); printf "%s%s", (i>2?",":""), $i} print ""; exit}' .github/CODEOWNERS)
+            test -f .github/issue-template-pinact-updates.md || (echo ".github/issue-template-pinact-updates.md template file must be given"; exit 1)
+            content=$(<.github/issue-template-pinact-updates.md)
+            content="${content//\{DATE\}/$today}"
+            content="${content//\{UPDATES\}/$updates}"
+            issue_url=$(gh issue create -t "GitHub Actions updates as of $today" -a "$usernames" -l github_actions -b "$content")
+            echo "Created issue: $issue_url"
+          else
+            echo "No updates available"
+          fi
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

@@ -40,6 +40,15 @@ repos:
     hooks: [id: actionlint]
   - repo: local
     hooks:
+      - id: pinact-check
+        name: Check that actions are correctly pinned
+        language: unsupported
+        entry: bash -c '  pinact run --check -c .github/pinact.yaml > /dev/null'
+        stages: [pre-commit, pre-push, post-commit, post-rewrite, manual]
+        always_run: true
+        pass_filenames: false
+  - repo: local
+    hooks:
       - id: lint-commit-msgs-via-git-cliff
         name: Lint commit messages via git cliff
         language: unsupported

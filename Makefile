@@ -56,9 +56,18 @@ toolupgrade:
 	done
 	pre-commit autoupdate
 
+# pin tagged actions like actions/checkout@v7 to commit SHAs like actions/checkout@d23ac80...
+pin_actions:
+	pinact run
+
+# update pinned actions (uses cooldown as defined in .github/pinact.yaml)
+update_actions:
+	pinact run --update
+
 # run GHA workflows linter and check that actions are correctly pinned
 check_actions:
 	npx --yes @kjanat/actionlint@v1.17.0
+	pinact run --check
 
 # fold the readme to 120 chars line length max.
 fold_readme:
