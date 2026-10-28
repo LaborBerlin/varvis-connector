@@ -1,6 +1,73 @@
 # Changelog
 
-## 0.3.0 - 2026-09-18
+## 0.4.0 - 2026-10-28
+
+### Bug Fixes
+
+- Validate download filenames more strictly and confine path in --create-folder-per-id to output directory
+- Reject non-HTTPS file download URLs
+- Limit SSL warning suppression to CLI
+- Apply URL quoting to parameters
+- Ensure atomic file downloads and cleanup on interruption (#28)
+- Improve exception handling in CLI by fixing broad exception swallowing (#28)
+- Replace runtime assertions with explicit exceptions (#28)
+- Ensure login-state is completely reset also when the logout fails (#28)
+- Add safeguard to prevent possible KeyError when asking for password interactively (#28)
+- Handle possible target path collisions when downloading files (#28)
+- Ensure logout when a command exits early
+- Preserve transport failures and support phase-specific timeouts
+- Implement thread-safe request session handling, re-login attempts and login status check to fix possible race conditions (#27)
+- Add retry jitter to HTTP requests to prevent synchronous API hammering with multiple threads
+- SNV stream reader may fail when numeric values are split across streaming chunks
+
+### CI
+
+- Fix CODEOWNERS parsing in dependencies update workflow
+- Fix gitleaks workflow not being run on push
+- Lint GitHub actions via actionlint
+- Pin actions using pinact
+- Update setup-uv action
+
+### Development
+
+- Add simongig to CODEOWNERS
+
+### Documentation
+
+- Update documentation to reflect the changes in file download handling
+- Add information about download connection pool, retry jitter and new CLI options / env. variables
+- Update documentation regarding actionlint, pinact and new workflows
+- Update documentation to mention the latest improvements
+
+### Features
+
+- Warn when password is passed as an argument
+
+### Other
+
+- Bump astral-sh/setup-uv from 10.0.1 to 10.1.0
+- Bump astral-sh/setup-uv from 10.1.0 to 10.2.0
+- Bump urllib3 to fix security vuln.
+- Update Python dependencies and pre-commit hooks
+
+### Performance
+
+- Use connection pool for downloads and add retry plus jitter (#27)
+- Reduce SNV streaming memory use with temporary-file caching
+- Use more memory-efficient pydantic function to serialize nested models to JSON instead of recursive model traversal
+- Validate model lists with pydantic TypeAdapter
+- Scan fragmented SNV values before retrying JSON decoding
+
+### Refactor
+
+- Replace argparse FileType with deferred pathlib file handling
+
+### Testing
+
+- Make sure MOCK_URL can be changed
+- Cover playground SNV streaming and fix array-valued filters
+
+## 0.3.0 - 2026-09-22
 
 ### Bug Fixes
 
@@ -34,6 +101,7 @@
 ### Testing
 
 - Skip playground tests when credentials are not configured
+- Update author attribution in test_models
 
 ## 0.2.2.post1 - 2026-05-29
 

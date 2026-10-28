@@ -1,6 +1,6 @@
 [project]
 name = "varvis-connector"
-version = "0.3.0"
+version = "0.4.0"
 description = "A Python package and CLI tool for interacting with the Varvis® API."
 readme = "README.md"
 authors = [
