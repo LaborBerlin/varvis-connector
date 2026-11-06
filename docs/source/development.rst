@@ -109,7 +109,7 @@ Run tests via *pytest* in the current Python venv::
 
     make test
 
-Run linting, type checking and tests for all supported Python versions::
+Run linting, type checking and tests for all supported Python versions (3.11 to 3.14)::
 
     make testall
 
@@ -226,9 +226,9 @@ GitHub Actions workflows (CI, audits, builds and releases)
 
 Workflows live in ``.github/workflows/``:
 
-- **``tests.yaml``**: pytest on Python 3.11 to 3.14; on push (3.13) enforces
-  ``make coverage-check``; on PR (3.13) runs ``make coverage-report``, updates
-  ``coverage-badge.svg``, and uploads the report artifact.
+- **``tests.yaml``**: pytest on Python 3.11 to 3.14; on PR (3.12) runs
+  ``make coverage-report``, updates the coverage badge on the ``badges`` branch,
+  and uploads the report artifact.
 - **``codequality.yaml``**: conventional commits check, ruff format/lint, pyright,
   bandit (Python 3.11 to 3.14).
 - **``gitleaks.yaml``**: credential leak scan on every push/PR.
