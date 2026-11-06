@@ -701,7 +701,8 @@ class CaseReportSnvConclusion(BaseModel):
     acmgCriteria: list[str]
     latestComment: str | None = None
     commentCount: int
-    annotations: dict[str, int | float | str | list[int | float | str] | None]
+    # Varvis may send an object (e.g. "ACMG Version": {"acmgGuidelineId": ..., "version": ...}).
+    annotations: dict[str, int | float | str | list[int | float | str] | dict[str, Any] | None]
     selectedPaper: list[str]
 
 
