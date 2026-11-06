@@ -9,7 +9,7 @@
 
 Its core purpose is not just to wrap HTTP endpoints, but to hide a number of inconsistencies and operational quirks in the upstream Varvis API. The implementation handles a non-standard login flow, endpoint prefix irregularities, inconsistent payload formats, weak error signaling by the API, and session invalidation under concurrency.
 
-The project is fairly mature in terms of developer ergonomics: it has strong documentation, broad automated tests, typed Pydantic models, linting/type-checking/security checks, and CI across Python 3.11 to 3.14. The main architectural weakness is concentration of logic in large modules, especially the CLI module.
+The project is fairly mature in terms of developer ergonomics: it has strong documentation, broad automated tests, typed Pydantic models, linting/type-checking/security checks, and CI across Python 3.11 to 3.15. The main architectural weakness is concentration of logic in large modules, especially the CLI module.
 
 The package version is managed in `pyproject.toml`; the repository is on the `0.3.0` release line.
 
@@ -71,7 +71,7 @@ The package entry point is simple:
 - `src/varvis_connector/__main__.py` creates `VarvisCLI` and runs it
 - `src/varvis_connector/__init__.py` re-exports `VarvisClient` and package version
 
-The package metadata in `pyproject.toml` is set up for public distribution. It includes README, author, GPL-3.0-only license metadata, license file declaration, keywords, PyPI classifiers for Python 3.11 through 3.14, and project URLs for homepage, hosted documentation, repository, issues, and changelog.
+The package metadata in `pyproject.toml` is set up for public distribution. It includes README, author, GPL-3.0-only license metadata, license file declaration, keywords, PyPI classifiers for Python 3.11 through 3.15, and project URLs for homepage, hosted documentation, repository, issues, and changelog.
 
 ## Runtime Architecture
 
@@ -836,7 +836,7 @@ The repository contains workflows for:
 
 ### Interesting maintenance choices
 
-- tests and code quality run across Python 3.11 to 3.14
+- tests and code quality run across Python 3.11 to 3.15
 - tests intentionally serialize CI concurrency to reduce load on the Varvis server
 - dependency updates are partially automated through a scheduled workflow that opens an issue, creates a branch, updates `uv.lock`, and pushes a commit
 - `git-cliff` is used both for changelog generation and for conventional-commit enforcement

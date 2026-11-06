@@ -101,7 +101,7 @@ test:
 
 # run all the checks for all the supported Python versions; reset to default Python version at the end
 testall:
-	bash scripts/test-all.sh 3.11 3.12 3.13 3.14
+	bash scripts/test-all.sh 3.11 3.12 3.13 3.14 3.15
 
 # build the documentation; used in docs GHA workflow
 docs:
