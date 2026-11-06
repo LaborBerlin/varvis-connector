@@ -65,7 +65,7 @@ Features
 * Separate connection and read timeouts, environment-based configuration, and comprehensive error handling
 * Memory-efficient CLI JSON serialization, with output files opened only when results are ready to be written
   (see :ref:`output_options`)
-* Support for Python 3.10 and above
+* Support for Python 3.11 through 3.15
 
 Currently covered varvis® API endpoints
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~

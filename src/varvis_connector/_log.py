@@ -37,20 +37,7 @@ DEFAULT_LOG_FORMATS = {
 DEFAULT_LOGGER_NAME = "varvis_connector"
 
 # mapping of log level names to their numeric values
-LOG_LEVEL_MAPPING = (
-    logging.getLevelNamesMapping()  # pyright: ignore
-    if hasattr(logging, "getLevelNamesMapping")  # check if this function exists (only Py >= 3.11)
-    else {
-        "CRITICAL": 50,
-        "FATAL": 50,
-        "ERROR": 40,
-        "WARN": 30,
-        "WARNING": 30,
-        "INFO": 20,
-        "DEBUG": 10,
-        "NOTSET": 0,
-    }
-)
+LOG_LEVEL_MAPPING = logging.getLevelNamesMapping()
 
 
 def cli_logger(

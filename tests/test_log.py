@@ -18,12 +18,30 @@ import logging
 from datetime import date
 from functools import partial
 
+import pytest
+
 from varvis_connector._log import cli_logger, default_logger, get_logger
 
 
 # usage of pytest caplog fixture requires to set remove_existing_handlers to False
 cli_logger_for_test = partial(cli_logger, propagate=True)
 default_logger_for_test = partial(default_logger, propagate=True)
+
+
+# check environment levels and aliases for both logger entry points
+@pytest.mark.parametrize("logger_factory", [cli_logger_for_test, default_logger_for_test])
+@pytest.mark.parametrize(
+    "level_name, expected_level",
+    [("debug", logging.DEBUG), ("WARN", logging.WARNING), ("fatal", logging.CRITICAL), ("invalid", logging.INFO)],
+)
+def test_logger_environment_log_level(monkeypatch, logger_factory, level_name, expected_level):
+    """Resolve environment log levels and aliases with an INFO fallback for unknown names."""
+    # select the environment level before configuring the logger
+    monkeypatch.setenv("VARVIS_LOG_LEVEL", level_name)
+    logger = logger_factory()
+
+    # the first handler receives the configured environment level
+    assert logger.handlers[0].level == expected_level
 
 
 def test_cli_logger_default_log_levels(caplog):
