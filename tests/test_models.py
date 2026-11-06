@@ -23,6 +23,7 @@ from varvis_connector.models import (
     CaseReportAnalysis,
     CaseReportMethodsItem,
     CaseReportPersonItem,
+    CaseReportVirtualPanelItem,
 )
 from varvis_connector._varvis_client import _parse_response_for_model
 
@@ -214,3 +215,67 @@ def test_client_response_parser_preserves_nested_wire_type():
     assert methods_item.analyses[0].analysisType == "SNV"
     assert methods_item.analyses[1].analysisType == "CNV"
     assert methods_item.analyses[2].analysisType == "SNV"
+
+
+def test_client_response_parser_accepts_object_valued_snv_annotation():
+    """A full case report with an object-valued "ACMG Version" annotation parses through the client parser."""
+    acmg_version = {"acmgGuidelineId": 18, "version": "ACMG Version 6"}
+    gene = {
+        "id": 1,
+        "name": "Synthetic gene",
+        "transcript": "NM_000000.1",
+        "transcriptCdsLength": 300,
+        "transcriptExonCount": 3,
+        "chromosome": "1",
+        "chromosomeLocation": "1p1",
+        "hpoTerms": [],
+    }
+    disease = {"id": 1, "name": "Synthetic disease"}
+    snv = {
+        "analysisIds": [900001],
+        "significance": {"id": 3, "name": "VUS"},
+        "genes": [gene],
+        "cdna": "c.1A>G",
+        "position": {"chromosome": "1", "start": 100, "end": 100},
+        "transcript": "NM_000000.1",
+        "variant": "1-100-A-G",
+        "acmgVersion": "ACMG Version 6",
+        "acmgCriteria": [],
+        "commentCount": 0,
+        "annotations": {"ACMG Version": acmg_version, "Score": 1.5},
+        "selectedPaper": [],
+    }
+    raw = _synthetic_case_report_raw()
+    raw["items"].append(
+        {
+            "type": "VIRTUAL_PANEL",
+            "allGenesPanel": False,
+            "virtualPanelId": 1,
+            "name": "Synthetic panel",
+            "genes": [gene],
+            "appliedFilters": [],
+            "conclusions": [
+                {
+                    "diseases": [disease],
+                    "modeOfInheritance": "AD",
+                    "genotype": "het",
+                    "clinicalAssessment": "Synthetic",
+                    "variantCategory": "SNV",
+                    "cnvConclusions": [],
+                    "snvConclusions": [snv],
+                    "disease": disease,
+                }
+            ],
+            "active": True,
+        }
+    )
+
+    class _MockResponse:
+        text = "dummy"
+
+        def json(self):
+            return {"success": True, "response": raw}
+
+    report = _parse_response_for_model(CaseReport, _MockResponse(), data_from_key="response")  # type: ignore[arg-type]
+    panel = next(i for i in report.items if isinstance(i, CaseReportVirtualPanelItem))
+    assert panel.conclusions[0].snvConclusions[0].annotations["ACMG Version"] == acmg_version
