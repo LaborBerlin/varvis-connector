@@ -1345,8 +1345,9 @@ def test_download_files_from_urls_parallel_rejects_non_https(monkeypatch, varvis
 def test_download_retries_use_exponential_backoff_with_jitter(
     monkeypatch, tmp_path, failures_before_success, backoff_factor
 ):
-    """Use independent download backoff with jitter and stop after two download retries."""
+    """Bypass environment proxies, use jittered download backoff, and stop after two retries."""
     # bypass environment proxies and replace only wire I/O so urllib3 performs real retries
+    monkeypatch.delenv("no_proxy", raising=False)
     monkeypatch.setenv("NO_PROXY", "*")
     attempts = []
     payload = b"new data"
