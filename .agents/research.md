@@ -729,6 +729,8 @@ Download retry tests replace urllib3's wire request method while exercising the 
 session, mounted adapter, and retry policy. Controlled jitter draws and intercepted sleeps
 verify attempt limits, exponential delay windows, disabled backoff, and eventual success or
 failure without network traffic or real retry delays.
+The tests remove inherited lowercase `no_proxy` before setting `NO_PROXY="*"`, because
+Requests gives the lowercase variable precedence when selecting environment proxies.
 
 The tests also use:
 
