@@ -808,9 +808,9 @@ The project uses:
 - `uv` for environment and dependency management
 - `uv_build` as build backend
 - Pydantic, requests, and tqdm as runtime dependencies
-- runtime minimum versions are Pydantic 2.14.1, requests 2.34.2, and tqdm 4.70.1
-- development minimum versions include coverage 7.16.2, inline-snapshot 0.36.1, and types-requests 2.33.0.20261006
-- documentation dependencies use Python-version markers: Python 3.12 and newer require Sphinx 9.1.1 and sphinx-autodoc-typehints 3.17.2, while older interpreters retain compatible minimums of 8.1.3 and 3.0.0
+- runtime minimum versions are Pydantic 2.14.2, requests 2.34.2, and tqdm 4.70.1
+- development minimum versions include coverage 7.17.0, pytest 9.2.0, polyfactory 3.5.0, inline-snapshot 0.36.1, and types-requests 2.33.0.20261030
+- documentation dependencies use Python-version markers: Python 3.13 and newer require Sphinx 9.2.0, Python 3.12 requires Sphinx 9.1.1, and Python 3.11 retains the compatible minimum of 8.1.3; sphinx-autodoc-typehints requires 3.17.4 on Python 3.12 and newer and 3.0.0 on Python 3.11
 - Ruff for linting/formatting
 - basedpyright for type checking
 - Bandit for security linting
@@ -842,13 +842,13 @@ The repository contains workflows for:
 - `git-cliff` is used both for changelog generation and for conventional-commit enforcement
 - `uv` uses a seven-day dependency cooldown through `exclude-newer`, with no package-specific exceptions
 - Python dependency refreshes use `make depupgrade`, which runs only `uv lock -U` and `uv sync --all-groups --all-extras`; `make toolupgrade` separately upgrades the tools listed in `Makefile` and runs `pre-commit autoupdate`
-- external GitHub Actions use full commit SHA pins with version comments; `astral-sh/setup-uv` uses `1c37ad07a6a961277cf70c0d37d6f313000f5884` (`v10.3.0`), and GitHub Releases use `softprops/action-gh-release`
+- external GitHub Actions use full commit SHA pins with version comments; `astral-sh/setup-uv` uses `68559e99cc807c1eb7e9238fd43a15bba460eec2` (`v10.3.3`), and GitHub Releases use `softprops/action-gh-release`
 - `make pin_actions` pins tagged action references, `make update_actions` refreshes pins, and `make check_actions` runs actionlint via npx followed by `pinact run --check`; pinact uses the seven-day minimum release age in `.github/pinact.yaml`
 - `pinact_update.yaml` replaces Dependabot for GitHub Actions updates; on the 15th of each month at 08:30 UTC it uses a self-hosted runner to open an issue with the pinact diff, assigned from `.github/CODEOWNERS` and labeled `github_actions`, using `.github/issue-template-pinact-updates.md`; it does not create a branch or push workflow changes
 - pinact workflows pass `${{ github.token }}` through `GITHUB_TOKEN`, which authenticates both pinact's API requests and the GitHub CLI's downloads and issue creation
 - local GitHub Actions checks require pinact on `PATH` and Node.js/npm for npx; `make init_dev` does not install them
 - `.agents/skills/update-dependencies/SKILL.md` covers Python packages, development tools and hooks, and GitHub Actions pins through their separate Makefile targets
-- the pre-commit baseline includes `ruff-pre-commit` v0.17.3 and `basedpyright-pre-commit-mirror` 1.40.2; standalone uv tools follow the seven-day package cooldown independently of hook revisions
+- the pre-commit baseline includes `ruff-pre-commit` v0.17.4 and `basedpyright-pre-commit-mirror` 1.40.2; standalone uv tools follow the seven-day package cooldown independently of hook revisions
 - gitleaks ignores version-tag push events as a standalone workflow trigger because the release orchestration workflow calls it explicitly for releases
 - pre-commit mirrors the main local quality gates, including Ruff, Bandit, basedpyright, shellcheck, actionlint, a local always-run `pinact-check` hook, and project-local commit/changelog checks
 
