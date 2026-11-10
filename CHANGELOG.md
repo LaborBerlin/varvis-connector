@@ -1,5 +1,24 @@
 # Changelog
 
+## 0.5.0 - 2026-11-10
+
+### Bug Fixes
+
+- Accept object values in SNV conclusion annotations
+
+### Development
+
+- [**breaking**] Drop Python 3.10 support
+- Add Python 3.15 support
+
+### Other
+
+- Update Python dependencies and setup-uv pins
+
+### Testing
+
+- Fix problem in test_download_retries_use_exponential_backoff_with_jitter when no_proxy env. variable is set
+
 ## 0.4.0 - 2026-10-28
 
 ### Bug Fixes
