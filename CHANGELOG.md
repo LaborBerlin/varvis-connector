@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.5.1 - 2026-11-10
+
+### Development
+
+- Remove your-highness from CODEOWNERS
+
+### Documentation
+
+- Add missing changelog entries
+
 ## 0.5.0 - 2026-11-10
 
 ### Bug Fixes

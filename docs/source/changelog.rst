@@ -1,6 +1,21 @@
 Changelog
 =========
 
+.. _051---2026-11-10:
+
+0.5.1 - 2026-11-10
+------------------
+
+Development
+~~~~~~~~~~~
+
+- Remove your-highness from CODEOWNERS
+
+Documentation
+~~~~~~~~~~~~~
+
+- Add missing changelog entries
+
 .. _050---2026-11-10:
 
 0.5.0 - 2026-11-10
@@ -10,6 +25,8 @@ Bug Fixes
 ~~~~~~~~~
 
 - Accept object values in SNV conclusion annotations
+
+.. _development-1:
 
 Development
 ~~~~~~~~~~~
@@ -63,12 +80,14 @@ CI
 - Pin actions using pinact
 - Update setup-uv action
 
-.. _development-1:
+.. _development-2:
 
 Development
 ~~~~~~~~~~~
 
 - Add simongig to CODEOWNERS
+
+.. _documentation-1:
 
 Documentation
 ~~~~~~~~~~~~~
@@ -137,7 +156,7 @@ CI
 - Disable weekly dependency audit -- we rely on GitHub dependabot alerts for this
 - Tolerate badge push failures on fork PRs without write permissions
 
-.. _development-2:
+.. _development-3:
 
 Development
 ~~~~~~~~~~~
@@ -178,7 +197,7 @@ Testing
 0.2.2.post1 - 2026-05-29
 ------------------------
 
-.. _documentation-1:
+.. _documentation-2:
 
 Documentation
 ~~~~~~~~~~~~~
@@ -190,7 +209,7 @@ Documentation
 0.2.2 - 2026-05-27
 ------------------
 
-.. _documentation-2:
+.. _documentation-3:
 
 Documentation
 ~~~~~~~~~~~~~
@@ -216,7 +235,7 @@ CI
 
 - Update setup-uv action to v8.1.0 in all workflows
 
-.. _development-3:
+.. _development-4:
 
 Development
 ~~~~~~~~~~~
@@ -225,7 +244,7 @@ Development
 - Don't overwrite commit message when amending the vers. bump commit
 - Require ``make audit`` in update-dependencies skill
 
-.. _documentation-3:
+.. _documentation-4:
 
 Documentation
 ~~~~~~~~~~~~~
@@ -263,7 +282,7 @@ CI
 - Add docs pages workflow
 - Set up publishing to PyPI and GitHub releases
 
-.. _documentation-4:
+.. _documentation-5:
 
 Documentation
 ~~~~~~~~~~~~~
