@@ -1,10 +1,38 @@
 Changelog
 =========
 
+.. _050---2026-11-10:
+
+0.5.0 - 2026-11-10
+------------------
+
+Bug Fixes
+~~~~~~~~~
+
+- Accept object values in SNV conclusion annotations
+
+Development
+~~~~~~~~~~~
+
+- [**breaking**] Drop Python 3.10 support
+- Add Python 3.15 support
+
+Other
+~~~~~
+
+- Update Python dependencies and setup-uv pins
+
+Testing
+~~~~~~~
+
+- Fix problem in test_download_retries_use_exponential_backoff_with_jitter when no_proxy env. variable is set
+
 .. _040---2026-10-28:
 
 0.4.0 - 2026-10-28
 ------------------
+
+.. _bug-fixes-1:
 
 Bug Fixes
 ~~~~~~~~~
@@ -35,6 +63,8 @@ CI
 - Pin actions using pinact
 - Update setup-uv action
 
+.. _development-1:
+
 Development
 ~~~~~~~~~~~
 
@@ -52,6 +82,8 @@ Features
 ~~~~~~~~
 
 - Warn when password is passed as an argument
+
+.. _other-1:
 
 Other
 ~~~~~
@@ -75,6 +107,8 @@ Refactor
 
 - Replace argparse FileType with deferred pathlib file handling
 
+.. _testing-1:
+
 Testing
 ~~~~~~~
 
@@ -86,7 +120,7 @@ Testing
 0.3.0 - 2026-09-22
 ------------------
 
-.. _bug-fixes-1:
+.. _bug-fixes-2:
 
 Bug Fixes
 ~~~~~~~~~
@@ -103,7 +137,7 @@ CI
 - Disable weekly dependency audit -- we rely on GitHub dependabot alerts for this
 - Tolerate badge push failures on fork PRs without write permissions
 
-.. _development-1:
+.. _development-2:
 
 Development
 ~~~~~~~~~~~
@@ -118,7 +152,7 @@ Features
 
 - Add streaming support for SNV annotations to prevent OOM
 
-.. _other-1:
+.. _other-2:
 
 Other
 ~~~~~
@@ -131,7 +165,7 @@ Styling
 
 - Configure ruff lint select and clean up parser imports
 
-.. _testing-1:
+.. _testing-2:
 
 Testing
 ~~~~~~~
@@ -163,7 +197,7 @@ Documentation
 
 - Add varvis logo and disclaimer
 
-.. _other-2:
+.. _other-3:
 
 Other
 ~~~~~
@@ -182,7 +216,7 @@ CI
 
 - Update setup-uv action to v8.1.0 in all workflows
 
-.. _development-2:
+.. _development-3:
 
 Development
 ~~~~~~~~~~~
@@ -198,7 +232,7 @@ Documentation
 
 - Fix link and typo in installation section
 
-.. _other-3:
+.. _other-4:
 
 Other
 ~~~~~
@@ -236,7 +270,7 @@ Documentation
 
 - Add GPLv3 license and respective notes
 
-.. _other-4:
+.. _other-5:
 
 Other
 ~~~~~
@@ -244,7 +278,7 @@ Other
 - Squash git history to create first public release
 - Set up AI assistance by providing AGENTS.md and ``update-dependencies`` skill
 
-.. _testing-2:
+.. _testing-3:
 
 Testing
 ~~~~~~~
